@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<!-- Language and direction will be set by JS -->
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Title will be set by JS using langData.title -->
+    <title id="title">GSM Gateway</title>
+    <!-- Link to the CSS file in LittleFS -->
+    <link rel="stylesheet" href="style.css" />
+    <!-- Optional: Favicon link -->
+    <link rel="icon" href="favicon.ico" type="image/x-icon" />
+  </head>
+  <body>
+    <!-- Main container for the UI -->
+    <div class="container">
+      <!-- Main heading, text set by JS -->
+      <h1 id="main-heading" data-lang="main-heading">GSM Gateway</h1>
+
+      <!-- Notification area for messages to the user -->
+      <div id="notification"></div>
+
+      <!-- Controls at the top (Language Selector, Connection Status) -->
+      <div id="top-controls">
+        <select
+          id="language-selector"
+          onchange="changeLanguage(this.value)"
+          title="Select Language"
+        >
+          <option value="ar">العربية</option>
+          <option value="en">English</option>
+        </select>
+        <!-- WebSocket connection status indicator -->
+        <span
+          id="connection-status"
+          class="status-dot status-disconnected"
+          title="WebSocket Status"
+        ></span>
+      </div>
+
+      <!-- PIN Entry Section (Shown only when PIN is required in STA mode) -->
+      <div id="pin-entry-section" class="tab-content" style="display: none">
+        <h2 data-lang="pinEntryTitle">Enter SIM PIN Code</h2>
+        <p data-lang="pinEntryPrompt">
+          The SIM card is locked and requires a PIN code.
+        </p>
+        <form id="pin-form">
+          <label for="pin-input" data-lang="pinCode">PIN Code:</label>
+          <input
+            type="password"
+            id="pin-input"
+            name="pin"
+            pattern="\d{4,8}"
+            required
+            autocomplete="off"
+          />
+          <button type="submit" data-lang="submitPin">Submit PIN</button>
+          <div id="pin-loader" class="loader"></div>
+          <p id="pin-error" style="color: red"></p>
+        </form>
+      </div>
+
+      <!-- Setup Mode Content (Shown only in AP Mode) -->
+      <div id="setup-mode" class="tab-content" style="display: none">
+        <h2 data-lang="setupTitle">Network Connection Setup</h2>
+        <p data-lang="setupDescription">
+          Please select your WiFi network and enter the password.
+        </p>
+        <button onclick="scanWifi()" data-lang="scanWifiBtn">
+          Scan for Networks
+        </button>
+        <div id="wifi-loader" class="loader"></div>
+        <ul id="wifi-list">
+          <li><em data-lang="scanWifiBtn">Click Scan...</em></li>
+        </ul>
+        <form id="wifi-form">
+          <label for="ssid" data-lang="ssidLabel">Network Name (SSID):</label>
+          <input
+            type="text"
+            id="ssid"
+            name="ssid"
+            required
+            autocomplete="off"
+          />
+          <label for="password" data-lang="passwordLabel">Password:</label>
+          <input
+            type="password"
+            id="password"
+            name="password"
+            autocomplete="off"
+          />
+          <button type="submit" data-lang="saveConnectBtn">
+            Save & Connect
+          </button>
+        </form>
+      </div>
+
+      <!-- Station Mode Content (Main Interface - Shown only in STA Mode) -->
+      <div id="station-mode" style="display: none">
+        <div class="tabs">
+          <button
+            class="tab-button active"
+            onclick="openTab(event, 'status')"
+            data-lang-tab="status"
+          >
+            Status
+          </button>
+          <button
+            class="tab-button"
+            onclick="openTab(event, 'config')"
+            data-lang-tab="config"
+          >
+            Settings
+          </button>
+          <button
+            class="tab-button"
+            onclick="openTab(event, 'sms')"
+            data-lang-tab="sms"
+          >
+            SMS
+          </button>
+          <button
+            class="tab-button"
+            onclick="openTab(event, 'ussd')"
+            data-lang-tab="ussd"
+          >
+            USSD
+          </button>
+          <button
+            class="tab-button"
+            onclick="openTab(event, 'calls')"
+            data-lang-tab="calls"
+          >
+            Calls
+          </button>
+          <button
+            class="tab-button"
+            onclick="openTab(event, 'log')"
+            data-lang-tab="log"
+          >
+            Log
+          </button>
+        </div>
+
+        <!-- Status Tab -->
+        <div id="status" class="tab-content active">
+          <h2 data-lang="statusTitle">Current Status</h2>
+          <div id="status-info">
+            <p>
+              <strong
+                ><span data-lang="wifiStatusLabel">WiFi Status:</span></strong
+              >
+              <span id="wifi-status">---</span>
+            </p>
+            <p>
+              <strong
+                ><span data-lang="ipAddressLabel">IP Address:</span></strong
+              >
+              <span id="ip-address">---</span>
+            </p>
+            <p>
+              <strong
+                ><span data-lang="simStatusLabel">SIM Status:</span></strong
+              >
+              <span id="sim-status">---</span> (<span data-lang="pinStatusLabel"
+                >PIN:</span
+              >
+              <span id="sim-pin-status">---</span>)
+            </p>
+            <p>
+              <strong
+                ><span data-lang="signalQualityLabel"
+                  >Signal Quality:</span
+                ></strong
+              >
+              <span id="signal-quality">---</span>
+            </p>
+            <p>
+              <strong
+                ><span data-lang="networkOperatorLabel"
+                  >Network Operator:</span
+                ></strong
+              >
+              <span id="network-operator">---</span>
+            </p>
+            <p>
+              <strong
+                ><span data-lang="simNumberLabel">SIM Number:</span></strong
+              >
+              <span id="sim-phone-number">---</span>
+            </p>
+          </div>
+          <button onclick="rebootDevice()" data-lang="rebootBtn">
+            Reboot Device
+          </button>
+        </div>
+
+        <!-- Config Tab -->
+        <div id="config" class="tab-content">
+          <h2 data-lang="configTitle">General Settings</h2>
+          <form id="config-form">
+            <fieldset>
+              <legend data-lang="serverConfigLegend">Server Settings</legend>
+              <label for="server-host" data-lang="serverHostLabel"
+                >Server Host/IP:</label
+              >
+              <input type="text" id="server-host" name="server_host" />
+              <label for="server-port" data-lang="serverPortLabel">Port:</label>
+              <input
+                type="number"
+                id="server-port"
+                name="server_port"
+                min="1"
+                max="65535"
+              />
+              <label for="server-user" data-lang="serverUserLabel"
+                >Username:</label
+              >
+              <input
+                type="text"
+                id="server-user"
+                name="server_user"
+                autocomplete="off"
+              />
+              <label for="server-pass" data-lang="serverPassLabel"
+                >Password:</label
+              >
+              <input
+                type="password"
+                id="server-pass"
+                name="server_pass"
+                autocomplete="off"
+              />
+            </fieldset>
+            <fieldset>
+              <legend data-lang="deviceConfigLegend">Device Settings</legend>
+              <label for="ap-password" data-lang="apPasswordLabel"
+                >Setup Mode (AP) Password:</label
+              >
+              <input
+                type="password"
+                id="ap-password"
+                name="ap_password"
+                data-lang-placeholder="apPasswordNotSetPlaceholder"
+                autocomplete="off"
+              />
+              <label for="sim-pin-save" data-lang="simPinSaveLabel"
+                >Saved SIM PIN Code:</label
+              >
+              <input
+                type="password"
+                id="sim-pin-save"
+                name="sim_pin"
+                data-lang-placeholder="simPinNotSetPlaceholder"
+                autocomplete="off"
+                pattern="\d{4,8}"
+              />
+            </fieldset>
+            <button type="submit" data-lang="saveConfigBtn">
+              Save Settings
+            </button>
+          </form>
+        </div>
+
+        <!-- SMS Tab -->
+        <div id="sms" class="tab-content">
+          <h2 data-lang="smsTitle">SMS Messages</h2>
+          <div id="send-sms-section">
+            <h3 data-lang="sendSmsTitle">Send Message</h3>
+            <form id="sms-form">
+              <label for="sms-number" data-lang="smsNumberLabel"
+                >Recipient Number:</label
+              >
+              <input type="tel" id="sms-number" name="number" required />
+              <label for="sms-message" data-lang="smsMessageLabel"
+                >Message Text:</label
+              >
+              <textarea
+                id="sms-message"
+                name="message"
+                rows="4"
+                required
+                oninput="updateCharCount()"
+              ></textarea>
+              <div id="char-count" data-lang-template="smsCharCount">
+                Chars: {chars} | Messages: {msgs} ({encoding})
+              </div>
+              <button type="submit" data-lang="sendBtn">Send</button>
+              <div
+                id="sms-loader"
+                class="loader"
+                style="margin-top: 1rem"
+              ></div>
+              <p id="sms-send-status" class="status-message"></p>
+            </form>
+          </div>
+          <hr />
+          <div id="sms-inbox-section">
+            <h3 data-lang="smsInboxTitle">Inbox</h3>
+            <button onclick="refreshInbox()" data-lang="refreshInboxBtn">
+              Refresh
+            </button>
+            <div id="inbox-loader" class="loader"></div>
+            <ul id="sms-list">
+              <li><em data-lang="inboxLoading">Loading...</em></li>
+            </ul>
+            <div id="sms-content-modal" class="modal">
+              <div class="modal-content">
+                <span
+                  class="close-button"
+                  onclick="closeModal('sms-content-modal')"
+                  title="Close"
+                  >×</span
+                >
+                <h4 data-lang="smsDetailsTitle">Message Details</h4>
+                <p>
+                  <strong><span data-lang="smsFromLabel">From:</span></strong>
+                  <span id="modal-sms-from"></span>
+                </p>
+                <p>
+                  <strong><span data-lang="smsDateLabel">Date:</span></strong>
+                  <span id="modal-sms-date"></span>
+                </p>
+                <p>
+                  <strong
+                    ><span data-lang="smsMessageLabel">Message:</span></strong
+                  >
+                </p>
+                <pre id="modal-sms-body"></pre>
+                <button onclick="deleteCurrentSms()" data-lang="deleteBtn">
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- USSD Tab -->
+        <div id="ussd" class="tab-content">
+          <h2 data-lang="ussdTitle">USSD Services</h2>
+          <form id="ussd-form">
+            <label for="ussd-code" data-lang="ussdCodeLabel"
+              >Code (e.g., *100#):</label
+            >
+            <input type="text" id="ussd-code" name="code" required />
+            <button type="submit" data-lang="sendBtn">Send</button>
+          </form>
+          <div id="ussd-loader" class="loader" style="margin-top: 1rem"></div>
+          <!-- USSD Reply Form -->
+          <form
+            id="ussd-reply-form"
+            style="
+              display: none;
+              margin-top: 1em;
+              border-top: 1px solid #ccc;
+              padding-top: 1em;
+            "
+          >
+            <label for="ussd-reply" data-lang="ussdReplyLabel"
+              >Reply to Network:</label
+            >
+            <input type="text" id="ussd-reply" name="reply" required />
+            <button type="submit" data-lang="replyBtn">Send Reply</button>
+            <button
+              type="button"
+              onclick="cancelUssdSession()"
+              data-lang="cancelBtn"
+            >
+              Cancel
+            </button>
+            <div
+              id="ussd-reply-loader"
+              class="loader"
+              style="margin-top: 1rem"
+            ></div>
+          </form>
+          <h3 data-lang="ussdResponseTitle">Network Response:</h3>
+          <div id="ussd-response" class="response-box">
+            <em data-lang="ussdWaiting">Waiting for response...</em>
+          </div>
+        </div>
+
+        <!-- Calls Tab -->
+        <div id="calls" class="tab-content">
+          <h2 data-lang="callsTitle">Calls & Forwarding</h2>
+          <div id="call-forwarding-section">
+            <h3 data-lang="callForwardingTitle">Call Forwarding</h3>
+            <form id="call-forwarding-form">
+              <label for="forward-number" data-lang="forwardNumberLabel"
+                >Forward to Number:</label
+              >
+              <input
+                type="tel"
+                id="forward-number"
+                name="number"
+                placeholder="Enter full international number"
+              />
+              <label data-lang="forwardingConditionsLabel"
+                >Activate Forwarding:</label
+              >
+              <div>
+                <input
+                  type="checkbox"
+                  id="cfu-toggle"
+                  name="cfu"
+                  onchange="updateCallForwarding('cfu')"
+                />
+                <label for="cfu-toggle" data-lang="cfuLabel"> Always</label>
+                <span id="cfu-status"></span>
+              </div>
+              <div>
+                <input
+                  type="checkbox"
+                  id="cfb-toggle"
+                  name="cfb"
+                  onchange="updateCallForwarding('cfb')"
+                />
+                <label for="cfb-toggle" data-lang="cfbLabel"> When Busy</label>
+                <span id="cfb-status"></span>
+              </div>
+              <div>
+                <input
+                  type="checkbox"
+                  id="cfnry-toggle"
+                  name="cfnry"
+                  onchange="updateCallForwarding('cfnry')"
+                />
+                <label for="cfnry-toggle" data-lang="cfnryLabel">
+                  No Reply</label
+                >
+                <span id="cfnry-status"></span>
+              </div>
+              <div>
+                <input
+                  type="checkbox"
+                  id="cfnrc-toggle"
+                  name="cfnrc"
+                  onchange="updateCallForwarding('cfnrc')"
+                />
+                <label for="cfnrc-toggle" data-lang="cfnrcLabel">
+                  Unreachable</label
+                >
+                <span id="cfnrc-status"></span>
+              </div>
+              <button
+                type="button"
+                onclick="queryCallForwarding()"
+                data-lang="queryCfBtn"
+              >
+                Query Status
+              </button>
+              <div id="cf-loader" class="loader"></div>
+            </form>
+          </div>
+          <hr />
+          <div id="incoming-call-section">
+            <h3 data-lang="incomingCallTitle">Current Incoming Call</h3>
+            <p id="caller-id-display">
+              <em data-lang="noIncomingCall">No incoming call...</em>
+            </p>
+          </div>
+        </div>
+
+        <!-- Log Tab -->
+        <div id="log" class="tab-content">
+          <h2 data-lang="logTitle">Activity Log</h2>
+          <button onclick="clearLog()" data-lang="clearLogBtn">
+            Clear Log
+          </button>
+          <pre id="activity-log" class="log-box"></pre>
+        </div>
+      </div>
+      <!-- End Station Mode -->
+    </div>
+    <!-- End Container -->
+    <script src="script.js"></script>
+  </body>
+</html>

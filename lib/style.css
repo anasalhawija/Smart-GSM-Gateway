@@ -1,0 +1,665 @@
+/* Basic Pico.css-like styling - Or include Pico CSS framework */
+:root {
+  --pico-font-size: 100%;
+  --pico-line-height: 1.5;
+  --pico-spacing: 1rem;
+  --pico-border-radius: 8px;
+  --pico-form-element-spacing-vertical: 0.75rem;
+  --pico-form-element-spacing-horizontal: 1rem;
+  --pico-card-background-color: #fff;
+  --pico-card-border-color: #e1e1e1;
+  --pico-primary: #007bff;
+  --pico-primary-hover: #0056b3;
+  --pico-background-color: #f4f4f4;
+  --pico-color: #333;
+  --pico-h1-color: #333;
+  --pico-h2-color: #444;
+  --pico-muted-color: #777;
+  --pico-error-color: #f44336;
+  --pico-success-color: #4caf50;
+  --pico-info-color: #2196f3;
+  --pico-warning-color: #ff9800;
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+  margin: 0;
+  padding: var(--pico-spacing);
+  background-color: var(--pico-background-color);
+  color: var(--pico-color);
+  line-height: var(--pico-line-height);
+  font-size: var(--pico-font-size);
+}
+
+.container {
+  max-width: 800px;
+  margin: var(--pico-spacing) auto;
+  background: var(--pico-card-background-color);
+  padding: calc(1.5 * var(--pico-spacing));
+  border-radius: var(--pico-border-radius);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--pico-card-border-color);
+  position: relative; /* Needed for absolute positioning of top-controls */
+}
+
+h1,
+h2,
+h3 {
+  text-align: center;
+  margin-top: 0;
+  margin-bottom: var(--pico-spacing);
+  color: var(--pico-h1-color);
+}
+h2 {
+  color: var(--pico-h2-color);
+  margin-top: 1.5rem;
+}
+h3 {
+  text-align: right;
+  font-size: 1.1em;
+  margin-top: 1.5rem;
+  border-bottom: 1px solid #eee;
+  padding-bottom: 0.3em;
+} /* Right align for section headers */
+html[dir="ltr"] h3 {
+  text-align: left;
+} /* Adjust for LTR */
+
+label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-weight: bold;
+}
+
+/* Styling for form elements */
+input[type="text"],
+input[type="password"],
+input[type="number"],
+input[type="tel"], /* Added for phone numbers */
+select,
+textarea {
+  width: 100%;
+  padding: var(--pico-form-element-spacing-vertical)
+    var(--pico-form-element-spacing-horizontal);
+  margin-bottom: var(--pico-spacing);
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  box-sizing: border-box; /* Include padding and border in element's total width and height */
+  font-size: inherit; /* Use body font size */
+  background-color: #fff; /* Ensure background is white */
+  color: var(--pico-color); /* Ensure text color is readable */
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--pico-primary);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
+textarea {
+  min-height: 80px;
+  resize: vertical; /* Allow vertical resizing */
+}
+
+button,
+input[type="submit"] {
+  background-color: var(--pico-primary);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  display: inline-block;
+  margin-top: var(--pico-spacing); /* Add space above buttons */
+  text-decoration: none;
+  text-align: center;
+  line-height: 1.5;
+  transition: background-color 0.15s ease-in-out; /* Smooth hover effect */
+}
+button:hover,
+input[type="submit"]:hover {
+  background-color: var(--pico-primary-hover);
+}
+button:disabled,
+input[type="submit"]:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* Tabs Styling */
+.tabs {
+  display: flex;
+  flex-wrap: wrap; /* Allow tabs to wrap on smaller screens */
+  border-bottom: 1px solid #ccc;
+  margin-bottom: 1.5rem;
+}
+.tab-button {
+  background: none;
+  border: none;
+  padding: 0.8rem 1.2rem;
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--pico-muted-color);
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px; /* Align bottom border with container border */
+  transition: color 0.15s ease-in-out, border-color 0.15s ease-in-out; /* Smooth transition */
+}
+.tab-button.active {
+  color: var(--pico-primary);
+  border-bottom-color: var(--pico-primary);
+  font-weight: bold;
+}
+.tab-button:hover {
+  color: var(--pico-primary);
+}
+.tab-content {
+  display: none; /* Hide inactive tabs */
+  padding-top: var(--pico-spacing);
+  animation: fadeIn 0.3s ease-in-out; /* Add fade-in effect */
+}
+.tab-content.active {
+  display: block; /* Show active tab */
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* WiFi Scan List Styling */
+#wifi-list {
+  list-style: none;
+  padding: 0;
+  max-height: 200px; /* Limit height and enable scrolling */
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  margin-bottom: 1rem;
+  border-radius: 4px;
+}
+#wifi-list li {
+  padding: 0.6rem var(--pico-form-element-spacing-horizontal);
+  cursor: pointer;
+  border-bottom: 1px solid #eee;
+  display: flex; /* Use flex for alignment */
+  justify-content: space-between; /* Space out elements */
+  align-items: center;
+}
+#wifi-list li:last-child {
+  border-bottom: none; /* Remove border from last item */
+}
+#wifi-list li:hover {
+  background-color: #f0f0f0; /* Highlight on hover */
+}
+#wifi-list li em {
+  /* Style for placeholder text (Scanning, No Networks) */
+  color: var(--pico-muted-color);
+  font-style: italic;
+  text-align: center;
+  width: 100%;
+  display: block;
+  padding: 1rem;
+}
+.wifi-rssi {
+  color: var(--pico-muted-color);
+  font-size: 0.9em;
+  margin-inline-start: 0.5em; /* Space before RSSI */
+}
+
+/* Status Info Block Styling */
+#status-info p {
+  margin: 0.6rem 0;
+  line-height: 1.6;
+  padding: 0.3rem 0;
+  border-bottom: 1px dotted #eee; /* Subtle separator */
+}
+#status-info p:last-child {
+  border-bottom: none;
+}
+#status-info strong {
+  display: inline-block;
+  min-width: 140px; /* Adjust as needed for alignment */
+  color: #555;
+}
+html[dir="ltr"] #status-info strong {
+  margin-right: 0.5em;
+}
+html[dir="rtl"] #status-info strong {
+  margin-left: 0.5em;
+}
+
+/* USSD Response Box Styling */
+#ussd-response,
+.response-box {
+  background-color: #e9e9e9;
+  padding: var(--pico-spacing);
+  border-radius: 4px;
+  min-height: 50px;
+  white-space: pre-wrap; /* Preserve line breaks and spaces */
+  margin-top: 1rem;
+  font-family: monospace; /* Use monospace font for better readability */
+  direction: ltr; /* Keep network response LTR even in RTL page */
+  text-align: left;
+  border: 1px solid #ddd;
+  line-height: 1.4;
+}
+#ussd-response em {
+  /* Placeholder text */
+  color: var(--pico-muted-color);
+  font-style: italic;
+}
+
+/* SMS Character Count Styling */
+#char-count {
+  font-size: 0.9em;
+  color: var(--pico-muted-color);
+  text-align: left;
+  margin-top: -0.5rem; /* Pull up slightly below textarea */
+  margin-bottom: 0.5rem;
+}
+html[dir="rtl"] #char-count {
+  text-align: right;
+}
+
+/* Loader Animation Styling */
+.loader {
+  border: 4px solid #f3f3f3; /* Light grey circle */
+  border-top: 4px solid var(--pico-primary); /* Blue spinner part */
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  animation: spin 1s linear infinite;
+  display: none; /* Hidden by default */
+  margin: 0.5rem auto; /* Center horizontally by default */
+  vertical-align: middle; /* Align nicely with text/buttons */
+}
+/* Adjust loader when inside or next to a button */
+button .loader,
+button + .loader {
+  margin: 0 0 0 0.5em; /* Add space to the left */
+  display: inline-block; /* Allow it next to button text */
+}
+html[dir="rtl"] button .loader,
+html[dir="rtl"] button + .loader {
+  margin: 0 0.5em 0 0; /* Add space to the right in RTL */
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Notification Banner Styling */
+#notification {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--pico-success-color); /* Default success */
+  color: white;
+  padding: 12px 25px; /* Slightly smaller padding */
+  border-radius: 5px;
+  display: none; /* Hidden by default */
+  z-index: 1000; /* Ensure it's on top */
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  text-align: center;
+  min-width: 250px;
+  font-size: 0.95em;
+  opacity: 0; /* Start hidden for fade-in */
+  transition: opacity 0.3s ease-in-out, display 0.3s ease-in-out;
+}
+#notification.show {
+  /* Use a class to trigger visibility and fade-in */
+  display: block;
+  opacity: 1;
+}
+#notification.error {
+  background-color: var(--pico-error-color);
+}
+#notification.info {
+  background-color: var(--pico-info-color);
+}
+#notification.warning {
+  background-color: var(--pico-warning-color);
+}
+
+/* Top Controls (Language, WS Status) Styling */
+#top-controls {
+  position: absolute;
+  top: 10px;
+  left: 15px; /* Position on the left for LTR */
+  display: flex;
+  align-items: center;
+  gap: 15px; /* Space between items */
+  z-index: 10; /* Above tabs */
+}
+html[dir="rtl"] #top-controls {
+  /* Adjust position for RTL */
+  left: auto;
+  right: 15px;
+}
+#language-selector {
+  width: auto; /* Don't take full width */
+  padding: 0.3rem 0.6rem;
+  margin-bottom: 0; /* Remove default bottom margin */
+  font-size: 0.9em;
+  border-radius: 3px;
+}
+.status-dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: #ccc; /* Default grey for disconnected */
+  vertical-align: middle;
+  transition: background-color 0.3s ease-in-out; /* Smooth color change */
+}
+.status-dot.status-connected {
+  background-color: var(--pico-success-color);
+} /* Green */
+.status-dot.status-disconnected {
+  background-color: var(--pico-error-color);
+} /* Red */
+.status-dot.status-connecting {
+  background-color: var(--pico-warning-color); /* Yellow */
+  animation: pulse 1.5s infinite ease-in-out; /* Pulse animation for connecting */
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* PIN Entry Section Specific Styling */
+#pin-entry-section {
+  border: 1px solid var(--pico-error-color);
+  padding: var(--pico-spacing);
+  margin-bottom: var(--pico-spacing);
+  background-color: #fff3f3; /* Light red background */
+  border-radius: var(--pico-border-radius);
+}
+#pin-error {
+  margin-top: 0.5rem;
+  font-weight: bold;
+}
+
+/* Fieldsets for Grouping Configuration Items */
+fieldset {
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: var(--pico-spacing) calc(1.5 * var(--pico-spacing));
+  margin-bottom: 1.5rem;
+}
+legend {
+  font-weight: bold;
+  padding: 0 0.5em;
+  color: var(--pico-h2-color);
+  font-size: 1.05em;
+}
+
+/* SMS Inbox Specific Styling */
+#sms-list {
+  max-height: 300px; /* Limit height */
+  overflow-y: auto; /* Enable vertical scroll */
+  border: 1px solid #ccc;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+  border-radius: 4px;
+}
+#sms-list li {
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem; /* Space between elements */
+}
+#sms-list li:last-child {
+  border-bottom: none;
+}
+#sms-list li:hover {
+  background-color: #f0f0f0;
+}
+#sms-list .sms-sender {
+  font-weight: bold;
+  flex-shrink: 0; /* Prevent sender name from shrinking */
+}
+#sms-list .sms-preview {
+  color: #555;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-grow: 1; /* Allow preview to take up space */
+  text-align: left;
+}
+#sms-list .sms-date {
+  font-size: 0.85em;
+  color: #888;
+  flex-shrink: 0;
+}
+html[dir="rtl"] #sms-list .sms-preview {
+  text-align: right;
+}
+
+/* Modal Dialog Styling */
+.modal {
+  display: none; /* Hidden by default */
+  position: fixed; /* Stay in place */
+  z-index: 1001; /* Sit on top of everything */
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto; /* Enable scroll if needed */
+  background-color: rgba(0, 0, 0, 0.5); /* Dim background */
+  animation: fadeInModal 0.3s ease-out;
+}
+.modal-content {
+  background-color: #fefefe;
+  margin: 10% auto; /* Adjust vertical margin */
+  padding: 25px;
+  border: 1px solid #888;
+  width: 85%;
+  max-width: 600px; /* Limit max width */
+  border-radius: var(--pico-border-radius);
+  position: relative;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+.close-button {
+  color: #aaa;
+  position: absolute;
+  top: 10px;
+  right: 20px; /* Position top right */
+  font-size: 28px;
+  font-weight: bold;
+  line-height: 1;
+}
+html[dir="rtl"] .close-button {
+  /* Adjust for RTL */
+  right: auto;
+  left: 20px;
+}
+.close-button:hover,
+.close-button:focus {
+  color: black;
+  text-decoration: none;
+  cursor: pointer;
+}
+.modal-content h4 {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+/* Style for preformatted text in modal (SMS body) */
+.modal-content pre {
+  background-color: #eee;
+  padding: 10px;
+  border-radius: 4px;
+  white-space: pre-wrap; /* Wrap long lines */
+  word-wrap: break-word; /* Break long words */
+  max-height: 300px; /* Limit height and scroll */
+  overflow-y: auto;
+  border: 1px solid #ddd;
+  font-family: monospace;
+}
+
+@keyframes fadeInModal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Call Forwarding Status Display Styling */
+#call-forwarding-form div {
+  margin-bottom: 0.5rem;
+} /* Space between CF options */
+#call-forwarding-form span[id$="-status"] {
+  font-size: 0.9em;
+  margin-inline-start: 0.5em; /* RTL/LTR compatible margin */
+  color: var(--pico-muted-color);
+}
+#call-forwarding-form span.status-active {
+  color: var(--pico-success-color);
+  font-weight: bold;
+}
+#call-forwarding-form span.status-inactive {
+  color: var(--pico-muted-color);
+}
+#call-forwarding-form span.status-error {
+  color: var(--pico-error-color);
+}
+#call-forwarding-form input[type="checkbox"] {
+  /* Align checkbox with label better */
+  width: auto;
+  margin-inline-end: 0.5em;
+  vertical-align: middle;
+}
+
+/* Activity Log Box Styling */
+.log-box {
+  background-color: #282c34; /* Dark background */
+  color: #abb2bf; /* Light grey text */
+  font-family: "Courier New", Courier, monospace;
+  font-size: 0.9em;
+  padding: var(--pico-spacing);
+  border-radius: 4px;
+  max-height: 400px; /* Limit height */
+  overflow-y: scroll; /* Enable vertical scroll */
+  white-space: pre-wrap; /* Wrap lines */
+  word-wrap: break-word; /* Break long words */
+  margin-top: 1rem;
+  border: 1px solid #444;
+  line-height: 1.4;
+}
+.log-box span.tx {
+  color: #61afef;
+} /* Blue for TX */
+.log-box span.rx {
+  color: #98c379;
+} /* Green for RX */
+.log-box span.error {
+  color: #e06c75;
+} /* Red for errors */
+.log-box span.info {
+  color: #c678dd;
+} /* Purple for info */
+
+/* Status Messages (like for SMS sending) Styling */
+.status-message {
+  margin-top: 0.5rem;
+  font-size: 0.9em;
+  font-weight: bold;
+}
+.status-message.success {
+  color: var(--pico-success-color);
+}
+.status-message.error {
+  color: var(--pico-error-color);
+}
+.status-message.info {
+  color: var(--pico-info-color);
+}
+
+/* Responsive adjustments for smaller screens */
+@media (max-width: 768px) {
+  .container {
+    padding: var(--pico-spacing);
+  }
+  #top-controls {
+    gap: 10px;
+  }
+  .modal-content {
+    width: 90%;
+    margin: 5% auto;
+  }
+}
+
+@media (max-width: 600px) {
+  body {
+    padding: calc(var(--pico-spacing) / 2);
+  }
+  .container {
+    margin: calc(var(--pico-spacing) / 2) 0;
+    padding: var(--pico-spacing);
+  }
+  h1 {
+    font-size: 1.5rem;
+  }
+  h2 {
+    font-size: 1.25rem;
+  }
+  .tabs {
+    font-size: 0.9rem;
+  }
+  .tab-button {
+    padding: 0.6rem 0.8rem;
+  }
+  /* Stack top controls vertically */
+  #top-controls {
+    position: static; /* Make it flow in document */
+    margin-bottom: var(--pico-spacing);
+    flex-direction: column;
+    align-items: flex-start; /* Align items to the start */
+  }
+  #status-info strong {
+    min-width: 100px;
+  } /* Reduce min-width for status labels */
+
+  .modal-content {
+    width: 95%;
+    padding: 15px;
+  }
+  .close-button {
+    top: 5px;
+    right: 10px;
+  }
+  html[dir="rtl"] .close-button {
+    right: auto;
+    left: 10px;
+  }
+}
