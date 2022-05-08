@@ -1,3 +1,5 @@
+
+#include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -51,6 +53,31 @@ String simResponseBuffer = "";
 bool simRequiresPin = false;
 bool simPinOk = false;
 
+// --- State Machines (Original Names Restored) ---
+enum SmsListState
+{
+    SMS_LIST_IDLE,
+    SMS_LIST_RUNNING,
+
+};
+SmsListState smsListState = SMS_LIST_IDLE;
+unsigned long smsListStartTime = 0;
+bool smsWaitingForContent = false;
+JsonDocument currentSmsJson;
+
+enum SmsSendState
+{
+    SMS_SEND_IDLE,
+    SMS_SEND_SETTING_CHARSET,
+    SMS_SEND_WAITING_PROMPT,
+    SMS_SEND_WAITING_FINAL_OK
+};
+SmsSendState smsSendState = SMS_SEND_IDLE;
+unsigned long smsSendStartTime = 0;
+String smsNumberToSend;
+String smsMessageToSend;
+bool smsIsUnicode = false;
+
 // --- Function Prototypes ---
 void setupWebServer();
 void startAPMode();
@@ -60,7 +87,7 @@ bool loadConfig();
 bool saveConfig();
 void notifyClients(const String &type, const String &data);
 void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t *payload, size_t length);
-String sendATCommand(const String &cmd, unsigned long timeout, const char *expectedResponsePrefix = nullptr, bool silent = false);
+String sendATCommand(const String &cmd, unsigned long timeout, const char *expectedResponsePrefix, bool silent);
 void handleSimData();
 void sendSMS(const String &number, const String &message);
 void sendUSSD(const String &code);
@@ -69,6 +96,13 @@ void updateStatus();
 bool checkSimPin();
 void initializeSIM();
 void serveStaticFiles();
+void readSMS(int index);
+void deleteSMS(int index);
+void startGetSmsList();
+void handleSmsListLine(const String &line);
+void handleSmsSendLine(const String &line);
+String decodeUcs2(const String &hexStr);
+String encodeUcs2(const String &utf8Str);
 
 // --- Arduino Setup ---
 void setup()
@@ -76,7 +110,8 @@ void setup()
     Serial.begin(115200);
     Serial.println("\nBooting Gateway...");
     sim900.begin(SIM_BAUD);
-    delay(1000);
+    Serial.println("Waiting for modem to stabilize (5 seconds)...");
+    delay(5000);
     Serial.println("Init LittleFS...");
     if (!LittleFS.begin())
     {
@@ -91,7 +126,9 @@ void setup()
         }
     }
     else
+    {
         Serial.println("FS mounted.");
+    }
     if (loadConfig())
         Serial.println("Config loaded.");
     else
@@ -131,27 +168,29 @@ void setup()
 void loop()
 {
     if (apMode)
+    {
         dnsServer.processNextRequest();
+    }
     else
     {
         webSocket.loop();
         if (WiFi.status() != WL_CONNECTED)
         {
-            static unsigned long lastRec = 0;
-            if (millis() - lastRec > 30000)
+            static unsigned long lastReconnectAttempt = 0;
+            if (millis() - lastReconnectAttempt > 30000)
             {
-                Serial.println("WiFi lost.");
+                Serial.println("WiFi connection lost. Attempting to reconnect...");
                 connectWiFi();
-                lastRec = millis();
+                lastReconnectAttempt = millis();
             }
         }
     }
     handleSimData();
-    if (!apMode && simPinOk && millis() - lastStatusUpdate > statusUpdateInterval)
+    if (!apMode && millis() - lastStatusUpdate > statusUpdateInterval)
     {
         Serial.println("Periodic status update...");
         updateStatus();
-        StaticJsonDocument<384> doc;
+        JsonDocument doc;
         doc["wifi_status"] = (WiFi.status() == WL_CONNECTED) ? "Connected" : "Disconnected";
         doc["ip_address"] = WiFi.localIP().toString();
         doc["sim_status"] = simStatus;
@@ -248,7 +287,7 @@ bool loadConfig()
             Serial.println("Fail read cfg");
             return false;
         }
-        StaticJsonDocument<768> doc;
+        JsonDocument doc;
         DeserializationError err = deserializeJson(doc, f);
         f.close();
         if (err)
@@ -265,18 +304,16 @@ bool loadConfig()
         strlcpy(config.server_user, doc["server_user"] | "", sizeof(config.server_user));
         strlcpy(config.server_pass, doc["server_pass"] | "", sizeof(config.server_pass));
         strlcpy(config.sim_pin, doc["sim_pin"] | "", sizeof(config.sim_pin));
-        Serial.println("Config loaded.");
         return true;
     }
     else
     {
-        Serial.println("No cfg file.");
         return false;
     }
 }
 bool saveConfig()
 {
-    StaticJsonDocument<768> doc;
+    JsonDocument doc;
     doc["wifi_ssid"] = config.wifi_ssid;
     doc["wifi_password"] = config.wifi_password;
     doc["ap_password"] = config.ap_password;
@@ -288,24 +325,17 @@ bool saveConfig()
     File f = LittleFS.open(CONFIG_FILE, "w");
     if (!f)
     {
-        Serial.println("Fail open cfg write");
         return false;
     }
     size_t bW = serializeJson(doc, f);
     f.close();
-    if (bW == 0)
-    {
-        Serial.println("Fail write cfg");
-        return false;
-    }
-    Serial.printf("Cfg saved(%d B).\n", bW);
-    return true;
+    return bW > 0;
 }
 
 // --- SIM Initialization & PIN Handling ---
 bool checkSimPin()
 {
-    String r = sendATCommand("AT+CPIN?", 5000, "+CPIN:", true);
+    String r = sendATCommand("AT+CPIN?", 8000, "+CPIN:", true);
     if (r.startsWith("+CPIN: READY"))
     {
         Serial.println("SIM Ready.");
@@ -329,19 +359,8 @@ bool checkSimPin()
                 simPinOk = true;
                 delay(3000);
                 r = sendATCommand("AT+CPIN?", 3000, "+CPIN:", true);
-                if (r.startsWith("+CPIN: READY"))
-                {
-                    Serial.println("SIM confirmed Ready.");
-                    simRequiresPin = false;
-                    return true;
-                }
-                else
-                {
-                    Serial.println("Warn: SIM !Ready after PIN OK?");
-                    simPinOk = true;
-                    simRequiresPin = false;
-                    return true;
-                }
+                simRequiresPin = false;
+                return true;
             }
             else
             {
@@ -398,294 +417,169 @@ void serveStaticFiles()
 {
     const char *cH = "max-age=86400";
     server.on("/style.css", HTTP_GET, [cH](AsyncWebServerRequest *r)
-              { AsyncWebServerResponse*p=r->beginResponse(LittleFS,"/style.css","text/css"); p->addHeader("Cache-Control",cH); r->send(p); });
+              { AsyncWebServerResponse* p=r->beginResponse(LittleFS,"/style.css","text/css"); p->addHeader("Cache-Control",cH); r->send(p); });
     server.on("/script.js", HTTP_GET, [cH](AsyncWebServerRequest *r)
-              { AsyncWebServerResponse*p=r->beginResponse(LittleFS,"/script.js","text/javascript"); p->addHeader("Cache-Control",cH); r->send(p); });
+              { AsyncWebServerResponse* p=r->beginResponse(LittleFS,"/script.js","text/javascript"); p->addHeader("Cache-Control",cH); r->send(p); });
     server.on("/lang/en.json", HTTP_GET, [cH](AsyncWebServerRequest *r)
-              { AsyncWebServerResponse*p=r->beginResponse(LittleFS,"/lang/en.json","application/json"); p->addHeader("Cache-Control",cH); r->send(p); });
+              { AsyncWebServerResponse* p=r->beginResponse(LittleFS,"/lang/en.json","application/json"); p->addHeader("Cache-Control",cH); r->send(p); });
     server.on("/lang/ar.json", HTTP_GET, [cH](AsyncWebServerRequest *r)
-              { AsyncWebServerResponse*p=r->beginResponse(LittleFS,"/lang/ar.json","application/json"); p->addHeader("Cache-Control",cH); r->send(p); });
+              { AsyncWebServerResponse* p=r->beginResponse(LittleFS,"/lang/ar.json","application/json"); p->addHeader("Cache-Control",cH); r->send(p); });
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *r)
               { r->send(LittleFS, "/index.html", "text/html"); });
     server.on("/favicon.ico", HTTP_GET, [](AsyncWebServerRequest *r)
-              {if(LittleFS.exists("/favicon.ico"))r->send(LittleFS,"/favicon.ico","image/x-icon"); else r->send(404); });
+              { if(LittleFS.exists("/favicon.ico")) r->send(LittleFS,"/favicon.ico","image/x-icon"); else r->send(404); });
 }
 void setupWebServer()
 {
     serveStaticFiles();
     server.on("/getmode", HTTP_GET, [](AsyncWebServerRequest *r)
-              {AsyncResponseStream*p=r->beginResponseStream("application/json"); StaticJsonDocument<128> d; d["mode"]=apMode?"AP":"STA"; d["sim_ready"]=simPinOk; d["sim_pin_required"]=simRequiresPin&&!simPinOk; serializeJson(d,*p); r->send(p); });
+              {
+        JsonDocument d;
+        d["mode"] = apMode ? "AP" : "STA";
+        d["sim_ready"] = simPinOk;
+        d["sim_pin_required"] = simRequiresPin && !simPinOk;
+        String s; serializeJson(d, s);
+        r->send(200, "application/json", s); });
     server.on("/scanwifi", HTTP_GET, [](AsyncWebServerRequest *r)
-              {if(!apMode){r->send(403,"application/json",R"({"success":false,"message":"Scan AP only"})");return;} Serial.println("Scan WiFi..."); WiFi.mode(WIFI_AP); delay(100); int n=WiFi.scanNetworks(); Serial.printf("%d nets.\n",n); StaticJsonDocument<1536> doc; if(n>0){doc["success"]=true; JsonArray netsA=doc.createNestedArray("networks"); struct WifiNetwork{String s;int32_t r;uint8_t e;}; WifiNetwork*nets=new WifiNetwork[n]; if(!nets){Serial.println("Mem fail!");doc["success"]=false;doc["message"]="Mem Err"; n=0;} else{for(int i=0;i<n;++i)nets[i]={WiFi.SSID(i),WiFi.RSSI(i),WiFi.encryptionType(i)}; std::sort(nets,nets+n,[](const WifiNetwork&a,const WifiNetwork&b){return a.r>b.r;}); for(int i=0;i<n;++i){JsonObject net=netsA.add<JsonObject>(); net["ssid"]=nets[i].s; net["rssi"]=nets[i].r; net["secure"]=(nets[i].e!=ENC_TYPE_NONE);} delete[] nets;}} else{doc["success"]=false;doc["message"]=(n==0)?"No nets":"Scan Err";} String buf; serializeJson(doc,buf); r->send(200,"application/json",buf); WiFi.scanDelete(); Serial.println("Scan done."); });
+              {
+        if (!apMode) { r->send(403, "application/json", R"({"success":false,"message":"Scan AP only"})"); return; }
+        int n = WiFi.scanNetworks();
+        JsonDocument doc;
+        if (n > 0) {
+            doc["success"] = true;
+            JsonArray netsA = doc["networks"].to<JsonArray>();
+            struct WifiNetwork { String s; int32_t r; uint8_t e; };
+            WifiNetwork *nets = new WifiNetwork[n];
+            for (int i = 0; i < n; ++i) { nets[i] = {WiFi.SSID(i), WiFi.RSSI(i), WiFi.encryptionType(i)}; }
+            std::sort(nets, nets + n, [](const WifiNetwork &a, const WifiNetwork &b) { return a.r > b.r; });
+            for (int i = 0; i < n; ++i) {
+                JsonObject net = netsA.add<JsonObject>();
+                net["ssid"] = nets[i].s; net["rssi"] = nets[i].r; net["secure"] = (nets[i].e != ENC_TYPE_NONE);
+            }
+            delete[] nets;
+        } else { doc["success"] = false; doc["message"] = (n == 0) ? "No nets" : "Scan Err"; }
+        String buf; serializeJson(doc, buf);
+        r->send(200, "application/json", buf);
+        WiFi.scanDelete(); });
     server.on("/savewifi", HTTP_POST, [](AsyncWebServerRequest *r)
-              {if(!apMode){r->send(403,"application/json",R"({"success":false,"message":"Save WiFi AP only"})");return;} bool ok=false; String msg="Fail save WiFi"; if(r->hasParam("ssid",true)){String s=r->getParam("ssid",true)->value(); String p=r->hasParam("password",true)?r->getParam("password",true)->value():""; strlcpy(config.wifi_ssid,s.c_str(),sizeof(config.wifi_ssid)); strlcpy(config.wifi_password,p.c_str(),sizeof(config.wifi_password)); if(saveConfig()){ok=true; msg="WiFi saved. Reboot..."; Serial.println(msg); AsyncResponseStream*p=r->beginResponseStream("application/json"); StaticJsonDocument<128> d; d["success"]=ok; d["message"]=msg; serializeJson(d,*p); r->send(p); delay(1500); ESP.restart(); return;} else{msg="Err write WiFi cfg."; Serial.println(msg);}} else{msg="'ssid' missing."; Serial.println(msg);} AsyncResponseStream*p=r->beginResponseStream("application/json"); StaticJsonDocument<128> d; d["success"]=ok; d["message"]=msg; serializeJson(d,*p); r->send(p); });
-    
-server.on("/saveconfig", HTTP_POST, [](AsyncWebServerRequest *r) {
-    bool ok = false;
-    String msg = "No changes.";
-    StaticJsonDocument<256> resp;
-    bool changed = false;
-    bool recheckPIN = false;
-
-    // ap_password
-    if (r->hasParam("ap_password", true)) {
-        String v = r->getParam("ap_password", true)->value();
-        if (v.length() == 0 || v.length() >= 8) {
-            if (strcmp(config.ap_password, v.c_str()) != 0) {
-                strlcpy(config.ap_password, v.c_str(), sizeof(config.ap_password));
-                changed = true;
-            }
-        } else {
-            msg = "AP Pass short.";
-        }
-    }
-
-    // server_host
-    if (r->hasParam("server_host", true)) {
-        String v = r->getParam("server_host", true)->value();
-        if (strcmp(config.server_host, v.c_str()) != 0) {
-            strlcpy(config.server_host, v.c_str(), sizeof(config.server_host));
-            changed = true;
-        }
-    }
-
-    // server_port
-    if (r->hasParam("server_port", true)) {
-        int v = r->getParam("server_port", true)->value().toInt();
-        if (v >= 0 && v <= 65535 && config.server_port != v) {
-            config.server_port = v;
-            changed = true;
-        } else if (v < 0 || v > 65535) {
-            msg = "Port invalid.";
-        }
-    }
-
-    // server_user
-    if (r->hasParam("server_user", true)) {
-        String v = r->getParam("server_user", true)->value();
-        if (strcmp(config.server_user, v.c_str()) != 0) {
-            strlcpy(config.server_user, v.c_str(), sizeof(config.server_user));
-            changed = true;
-        }
-    }
-
-    // server_pass
-    if (r->hasParam("server_pass", true)) {
-        String v = r->getParam("server_pass", true)->value();
-        if (strcmp(config.server_pass, v.c_str()) != 0) {
-            strlcpy(config.server_pass, v.c_str(), sizeof(config.server_pass));
-            changed = true;
-        }
-    }
-
-    // sim_pin
-    if (r->hasParam("sim_pin", true)) {
-        String v = r->getParam("sim_pin", true)->value();
-        bool valid = (v.length() == 0) || (v.length() >= 4 && v.length() <= 8);
-        for (size_t i = 0; i < v.length(); i++) {
-            if (!isDigit(v.charAt(i))) valid = false;
-        }
-        if (valid) {
-            if (strcmp(config.sim_pin, v.c_str()) != 0) {
-                strlcpy(config.sim_pin, v.c_str(), sizeof(config.sim_pin));
-                changed = true;
-            }
-        } else {
-            msg = "PIN invalid.";
-        }
-    }
-
-   
-    if (changed) {
-        if (saveConfig()) {
-            ok = true;
-            if (simRequiresPin && !simPinOk && strlen(config.sim_pin) > 0) {
-                msg = "Cfg saved. Try PIN...";
-                recheckPIN = true;
-            } else {
-                msg = "Cfg saved.";
-            }
-        } else {
-            ok = false;
-            msg = "Err write cfg.";
-        }
-    } else {
-        ok = true;
-    }
-
-   
-    resp["success"] = ok;
-    resp["message"] = msg;
-    resp["needs_pin_recheck"] = recheckPIN;
-    String s;
-    serializeJson(resp, s);
-    r->send(ok ? 200 : 500, "application/json", s);
-
-    
-    if (recheckPIN) {
-        delay(500);
-        Serial.println("Trigger PIN recheck...");
-        if (checkSimPin()) {
-            Serial.println("SIM Ready.");
-            updateStatus();
-            StaticJsonDocument<384> j;
-            j["sim_status"] = simStatus;
-            String js;
-            serializeJson(j, js);
-            notifyClients("status", js);
-        } else {
-            Serial.println("SIM !Ready.");
-            StaticJsonDocument<384> j;
-            j["sim_status"] = simStatus;
-            String js;
-            serializeJson(j, js);
-            notifyClients("status", js);
-        }
-    }
-});  
-
-
-server.on("/enterpin", HTTP_POST, [](AsyncWebServerRequest *r) {
-    if (!simRequiresPin || simPinOk) {
-        r->send(400, "application/json", R"({"success":false,"message":"PIN !req"})");
-        return;
-    }
-
-    StaticJsonDocument<128> doc;
-
-    if (r->hasParam("pin", true)) {
-        String pin = r->getParam("pin", true)->value();
-        bool valid = (pin.length() >= 4 && pin.length() <= 8);
-        for (size_t i = 0; i < pin.length(); i++) {
-            if (!isDigit(pin.charAt(i))) valid = false;
-        }
-
-        if (valid) {
-            Serial.println("Try PIN...");
-            
-            String pc = "AT+CPIN=\"" + pin + "\"\r";
-            String resp = sendATCommand(pc, 5000, nullptr, false);
-
-            if (resp.startsWith("OK")) {
-                Serial.println("PIN OK!");
-                simPinOk = true;
-                simRequiresPin = false;
-                doc["success"] = true;
-                doc["message"] = "PIN OK.";
-                bool save = r->hasParam("savepin", true)
-                            && r->getParam("savepin", true)->value() == "true";
-                if (save && strcmp(config.sim_pin, pin.c_str()) != 0) {
-                    strlcpy(config.sim_pin, pin.c_str(), sizeof(config.sim_pin));
-                    if (saveConfig())
-                        doc["message"] = "PIN OK & saved.";
-                    else
-                        doc["message"] = "PIN OK, save fail.";
-                }
-                String s2; serializeJson(doc, s2);
-                r->send(200, "application/json", s2);
-
-                delay(3000);
-                updateStatus();
-                StaticJsonDocument<384> statusUpdateDoc;
-                statusUpdateDoc["wifi_status"]  = (WiFi.status()==WL_CONNECTED) ? "Connected" : "Disconnected";
-                statusUpdateDoc["ip_address"]   = WiFi.localIP().toString();
-                statusUpdateDoc["sim_status"]   = simStatus;
-                statusUpdateDoc["signal_quality"] = signalQuality;
-                statusUpdateDoc["network_operator"] = networkOperator;
-                statusUpdateDoc["sim_phone_number"] = simPhoneNumber;
-                statusUpdateDoc["sim_pin_status"] = simRequiresPin ? (simPinOk ? "OK" : "Required") : "Not Required";
-                String statusJsonString;
-                serializeJson(statusUpdateDoc, statusJsonString);
-                notifyClients("status", statusJsonString);
-            }
-            else {
-                Serial.println("PIN Fail!");
-                simPinOk = false;
-                simRequiresPin = true;
-                doc["success"] = false;
-                doc["message"] = "PIN Reject/Err. Resp: " + resp;
-                String s3; serializeJson(doc, s3);
-                r->send(400, "application/json", s3);
+              {
+        if (!apMode) { r->send(403); return; }
+        if (r->hasParam("ssid", true)) {
+            strlcpy(config.wifi_ssid, r->getParam("ssid", true)->value().c_str(), sizeof(config.wifi_ssid));
+            strlcpy(config.wifi_password, r->getParam("password", true)->value().c_str(), sizeof(config.wifi_password));
+            if (saveConfig()) {
+                r->send(200, "application/json", R"({"success":true,"message":"WiFi saved. Reboot..."})");
+                delay(1500); ESP.restart(); return;
             }
         }
-        else {
-            r->send(400, "application/json", R"({"success":false,"message":"Invalid PIN format"})");
-        }
-    }
-    else {
-        r->send(400, "application/json", R"({"success":false,"message":"'pin' parameter missing"})");
-    }
-});  
-
+        r->send(500, "application/json", R"({"success":false,"message":"Save failed"})"); });
     server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest *r)
-              {Serial.println("Reboot req..."); r->send(200,"application/json",R"({"success":true,"message":"Reboot..."})"); delay(100); yield(); Serial.println("Restart now."); ESP.restart(); });
-    // API Placeholders...
-    server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *r)
-              {if(apMode){r->send(403);}else if(!simPinOk){r->send(503);}else{StaticJsonDocument<384> d; /*fill*/ r->send(200,"application/json","{}");} });
-    server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *r)
-              {if(apMode){r->send(403);}else{StaticJsonDocument<512> d; /*fill safe*/ r->send(200,"application/json","{}");} });
-    server.on("/api/sms", HTTP_POST, [](AsyncWebServerRequest *r)
-              {if(apMode){r->send(403);}else if(!simPinOk){r->send(503);}else if(r->hasParam("number",true)&&r->hasParam("message",true)){String n=r->getParam("number",true)->value(); String m=r->getParam("message",true)->value(); sendSMS(n,m); r->send(202,"application/json",R"({"status":"accepted"})");}else{r->send(400,"application/json",R"({"status":"error","message":"missing params"})");} });
-    server.on("/api/ussd", HTTP_POST, [](AsyncWebServerRequest *r)
-              {if(apMode){r->send(403);}else if(!simPinOk){r->send(503);}else if(r->hasParam("code",true)){String c=r->getParam("code",true)->value(); sendUSSD(c); r->send(202,"application/json",R"({"status":"accepted"})");}else{r->send(400,"application/json",R"({"status":"error","message":"missing code"})");} });
+              {
+        r->send(200, "application/json", R"({"success":true,"message":"Rebooting..."})");
+        delay(100); ESP.restart(); });
     server.onNotFound([](AsyncWebServerRequest *r)
-                      {if(apMode){Serial.print("404(AP):H:");Serial.print(r->host());Serial.print(",U:");Serial.println(r->url()); bool isGW=(r->host()==currentIP); bool isAsset=r->url().endsWith(".css")||r->url().endsWith(".js")||r->url().endsWith(".ico"); if(!isGW&&!isAsset){AsyncWebServerResponse*p=r->beginResponse(302);p->addHeader("Location","http://"+currentIP);r->send(p);}else{r->send(404);}}else{r->send(404);} });
+                      {
+        if (apMode && r->host() != WiFi.softAPIP().toString()) {
+            r->redirect("http://" + WiFi.softAPIP().toString());
+        } else {
+            r->send(404);
+        } });
 }
 
 // --- WebSocket Handling ---
-
 void notifyClients(const String &type, const String &data)
 {
-    bool isJson = (data.startsWith("{") && data.endsWith("}")) || (data.startsWith("[") && data.endsWith("]"));
-    // *** INCREASED MAIN DOCUMENT SIZE for potentially large USSD hex data ***
-    StaticJsonDocument<1536> doc; // Increased from 1024
+    JsonDocument doc;
     doc["type"] = type;
-    if (isJson)
+    bool isJ = (data.startsWith("{") && data.endsWith("}")) || (data.startsWith("[") && data.endsWith("]"));
+    if (isJ)
     {
-        // Increase nested slightly too, just in case
-        StaticJsonDocument<1024> nestedDoc;
-        DeserializationError error = deserializeJson(nestedDoc, data);
-        if (!error)
+        JsonDocument nestedDoc;
+        if (deserializeJson(nestedDoc, data) == DeserializationError::Ok)
         {
             doc["data"] = nestedDoc;
         }
         else
         {
-            Serial.printf("WARN:BadJSON '%s':%s\n", type.c_str(), error.c_str());
-            doc["data"] = data; // Fallback to raw string
+            doc["data"] = data;
         }
     }
     else
     {
         doc["data"] = data;
     }
-    String jsonString;
-    size_t len = serializeJson(doc, jsonString);
-    if (len > 0)
+    String s;
+    if (serializeJson(doc, s) > 0)
     {
-        webSocket.broadcastTXT(jsonString);
-    }
-    else
-    {
-        Serial.println("WS Send Err: Serialization failed (Msg too large?).");
-        // Optionally send a simplified error message if serialization fails
-        webSocket.broadcastTXT("{\"type\":\"error\",\"data\":\"Message too large to send\"}");
+        webSocket.broadcastTXT(s);
     }
 }
 
 void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 {
-    switch (type)
+    if (type != WStype_TEXT)
+        return;
+
+    JsonDocument doc;
+    if (deserializeJson(doc, payload, length) != DeserializationError::Ok)
+        return;
+
+    const char *act = doc["action"];
+    if (!act)
+        return;
+
+    Serial.printf("[%u]WS Action:%s\n", num, act);
+    if ((strcmp(act, "sendSMS") == 0 || strcmp(act, "sendUSSD") == 0 || strcmp(act, "sendUSSDReply") == 0) && !simPinOk)
     {
-    case WStype_DISCONNECTED:
-        Serial.printf("[%u]WS Disconn!\n", num);
-        break;
-    case WStype_CONNECTED:
+        notifyClients("error", "SIM not ready");
+        return;
+    }
+
+    if (strcmp(act, "sendSMS") == 0)
     {
-        IPAddress ip = webSocket.remoteIP(num);
-        Serial.printf("[%u]WS Conn:%s\n", num, ip.toString().c_str());
-        Serial.println("Send init status...");
-        StaticJsonDocument<384> sD;
+        if (!doc["number"].isNull() && !doc["message"].isNull())
+        {
+            sendSMS(doc["number"].as<String>(), doc["message"].as<String>());
+        }
+    }
+    else if (strcmp(act, "sendUSSD") == 0)
+    {
+        if (!doc["code"].isNull())
+        {
+            sendUSSD(doc["code"].as<String>());
+        }
+    }
+    else if (strcmp(act, "sendUSSDReply") == 0)
+    {
+        if (!doc["reply"].isNull())
+        {
+            sendUSSDReply(doc["reply"].as<String>());
+        }
+    }
+    else if (strcmp(act, "getSMSList") == 0)
+    {
+        startGetSmsList();
+    }
+    else if (strcmp(act, "readSMS") == 0)
+    {
+        if (!doc["index"].isNull())
+        {
+            readSMS(doc["index"].as<int>());
+        }
+    }
+    else if (strcmp(act, "deleteSMS") == 0)
+    {
+        if (!doc["index"].isNull())
+        {
+            deleteSMS(doc["index"].as<int>());
+        }
+    }
+
+    else if (strcmp(act, "getStatus") == 0)
+    {
+        updateStatus(); // First, refresh the status variables
+        // Then, send the updated status to the client
+        JsonDocument sD;
         sD["wifi_status"] = (WiFi.status() == WL_CONNECTED) ? "Connected" : "Disconnected";
         sD["ip_address"] = WiFi.localIP().toString();
         sD["sim_status"] = simStatus;
@@ -696,148 +590,6 @@ void handleWebSocketMessage(uint8_t num, WStype_t type, uint8_t *payload, size_t
         String sS;
         serializeJson(sD, sS);
         notifyClients("status", sS);
-        Serial.println("Init status sent.");
-        Serial.println("Send init cfg...");
-        StaticJsonDocument<512> cD;
-        cD["server_host"] = config.server_host;
-        cD["server_port"] = config.server_port;
-        cD["server_user"] = config.server_user;
-        cD["ap_password_set"] = (strlen(config.ap_password) >= 8);
-        cD["sim_pin_set"] = (strlen(config.sim_pin) > 0);
-        String cS;
-        serializeJson(cD, cS);
-        notifyClients("config", cS);
-        Serial.println("Init cfg sent.");
-    }
-    break;
-    case WStype_TEXT:
-    {
-        StaticJsonDocument<384> doc;
-        DeserializationError err = deserializeJson(doc, payload, length);
-        if (err)
-        {
-            Serial.print("WS JSON Err:");
-            Serial.println(err.c_str());
-            webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"Invalid JSON\"}");
-            return;
-        }
-        const char *act = doc["action"];
-        if (!act)
-        {
-            webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"'action' missing\"}");
-            return;
-        }
-        Serial.printf("[%u]WS Action:%s\n", num, act);
-        bool simN = (strcmp(act, "sendSMS") == 0 || strcmp(act, "sendUSSD") == 0 || strcmp(act, "sendUSSDReply") == 0);
-        if (simN && !simPinOk)
-        {
-            Serial.printf("Act '%s' rej: SIM nrdy\n", act);
-            webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"SIM nrdy\"}");
-            return;
-        }
-        if (strcmp(act, "sendSMS") == 0)
-        {
-            Serial.println("DBG:Proc 'sendSMS'...");
-            JsonVariantConst n_v = doc["number"];
-            JsonVariantConst m_v = doc["message"];
-            if (n_v.is<const char *>() && m_v.is<const char *>())
-            {
-                String nS = n_v.as<String>();
-                String mS = m_v.as<String>();
-                Serial.printf("DBG:Num='%s',Msg='%s'\n", nS.c_str(), mS.c_str());
-                Serial.println("DBG:>>> Call sendSMS <<<");
-                sendSMS(nS, mS);
-                Serial.println("DBG:<<< Ret sendSMS <<<");
-            }
-            else
-            {
-                Serial.println("DBG:Inv SMS prms.");
-                webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"Inv SMS prms\"}");
-            }
-            Serial.println("DBG:Fin 'sendSMS'.");
-        }
-        else if (strcmp(act, "sendUSSD") == 0)
-        {
-            Serial.println("DBG:Proc 'sendUSSD'...");
-            JsonVariantConst c_v = doc["code"];
-            if (c_v.is<const char *>())
-            {
-                String cS = c_v.as<String>();
-                Serial.printf("DBG:Code='%s'\n", cS.c_str());
-                Serial.println("DBG:>>> Call sendUSSD <<<");
-                sendUSSD(cS);
-                Serial.println("DBG:<<< Ret sendUSSD <<<");
-            }
-            else
-            {
-                Serial.println("DBG:Inv USSD prms.");
-                webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"Inv USSD code\"}");
-            }
-            Serial.println("DBG:Fin 'sendUSSD'.");
-        }
-        else if (strcmp(act, "sendUSSDReply") == 0)
-        {
-            Serial.println("DBG:Proc 'sendUSSDReply'...");
-            JsonVariantConst r_v = doc["reply"];
-            if (r_v.is<const char *>())
-            {
-                String rS = r_v.as<String>();
-                Serial.printf("DBG:Reply='%s'\n", rS.c_str());
-                Serial.println("DBG:>>> Call sendUSSDReply <<<");
-                sendUSSDReply(rS);
-                Serial.println("DBG:<<< Ret sendUSSDReply <<<");
-            }
-            else
-            {
-                Serial.println("DBG:Inv USSD Reply prms.");
-                webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"Inv USSD reply\"}");
-            }
-            Serial.println("DBG:Fin 'sendUSSDReply'.");
-        }
-        else if (strcmp(act, "getStatus") == 0)
-        {
-            Serial.println("DBG:Proc 'getStatus'...");
-            StaticJsonDocument<384> s;
-            s["wifi_status"] = (WiFi.status() == WL_CONNECTED) ? "Connected" : "Disconnected";
-            s["ip_address"] = WiFi.localIP().toString();
-            s["sim_status"] = simStatus;
-            s["signal_quality"] = signalQuality;
-            s["network_operator"] = networkOperator;
-            s["sim_phone_number"] = simPhoneNumber;
-            s["sim_pin_status"] = simRequiresPin ? (simPinOk ? "OK" : "Required") : "Not Required";
-            String ss;
-            serializeJson(s, ss);
-            notifyClients("status", ss);
-            Serial.println("DBG:Fin 'getStatus'.");
-        }
-        else if (strcmp(act, "getConfig") == 0)
-        {
-            Serial.println("DBG:Proc 'getConfig'...");
-            StaticJsonDocument<512> c;
-            c["server_host"] = config.server_host;
-            c["server_port"] = config.server_port;
-            c["server_user"] = config.server_user;
-            c["ap_password_set"] = (strlen(config.ap_password) >= 8);
-            c["sim_pin_set"] = (strlen(config.sim_pin) > 0);
-            String cs;
-            serializeJson(c, cs);
-            notifyClients("config", cs);
-            Serial.println("DBG:Fin 'getConfig'.");
-        }
-        else if (strcmp(act, "getSMSList") == 0 || strcmp(act, "readSMS") == 0 || strcmp(act, "deleteSMS") == 0 || strcmp(act, "setCallForwarding") == 0 || strcmp(act, "getCallForwardingStatus") == 0)
-        {
-            Serial.printf("DBG:Act '%s' !impl.\n", act);
-            webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"Act !impl\"}");
-        }
-        else
-        {
-            Serial.printf("Unk WS Act:%s\n", act);
-            webSocket.sendTXT(num, "{\"type\":\"error\",\"data\":\"Unk action\"}");
-        }
-    }
-    break;
-    default:
-        break;
     }
 }
 
@@ -875,31 +627,20 @@ String sendATCommand(const String &cmd, unsigned long timeout, const char *expec
             line.trim();
             if (line.length() > 0)
             {
-                if (!silent)
-                {
-                    Serial.print("RX Line Check: ");
-                    Serial.println(line);
-                }
                 if (expectedResponsePrefix && line.startsWith(expectedResponsePrefix))
                 {
-                    if (!silent)
-                        Serial.println(" -> Found Prefix Line.");
                     relevantLine = line;
                     if (strcmp(expectedResponsePrefix, "OK") == 0 || strcmp(expectedResponsePrefix, "ERROR") == 0)
                         commandFinished = true;
                 }
                 else if (line.startsWith("OK"))
                 {
-                    if (!silent)
-                        Serial.println(" -> Found OK Line.");
                     if (relevantLine.isEmpty())
                         relevantLine = line;
                     commandFinished = true;
                 }
                 else if (line.startsWith("ERROR") || line.indexOf("ERROR:") != -1)
                 {
-                    if (!silent)
-                        Serial.println(" -> Found ERROR Line.");
                     if (relevantLine.isEmpty())
                         relevantLine = line;
                     commandFinished = true;
@@ -915,226 +656,346 @@ String sendATCommand(const String &cmd, unsigned long timeout, const char *expec
 end_wait_buffered:
     if (!commandFinished)
     {
-        if (!silent)
-        {
-            Serial.printf("AT TIMEOUT '%s'(%lu ms)\n", cmd.c_str(), timeout);
-            Serial.println("Full Buffer:" + responseBuffer);
-        }
         relevantLine = "TIMEOUT";
-    }
-    if (!silent && responseBuffer.length() > 0)
-    {
-        responseBuffer.trim();
-        if (responseBuffer.length() > 0)
-            Serial.println("Remain buffer:" + responseBuffer);
     }
     return relevantLine;
 }
 
-// --- SIM Actions ---
-void sendSMS(const String &number, const String &message)
+// --- SIM Data Handling ---
+
+void handleSimData()
 {
-    Serial.println(">>> DEBUG: Entered sendSMS function <<<");
-    if (!simPinOk)
+    // Check for timeouts in state machines first
+    if (smsListState == SMS_LIST_RUNNING && millis() - smsListStartTime > 20000)
     {
-        Serial.println("SMS fail: SIM nrdy");
-        notifyClients("sms_sent", R"({"status":"ERROR","message":"SIM nrdy"})");
-        return;
+        Serial.println("ERROR: Timed out waiting for SMS list 'OK'.");
+        notifyClients("sms_list_finished", "{\"status\":\"timeout\"}");
+        smsListState = SMS_LIST_IDLE;
     }
-    Serial.printf("Sending SMS to %s...\n", number.c_str());
-    notifyClients("sms_status", R"({"status":"Sending..."})");
-    Serial.println("DEBUG: Setting CMGF=1...");
-    String cmgfResp = sendATCommand("AT+CMGF=1", 1500, "OK", false);
-    if (!cmgfResp.startsWith("OK"))
+    if (smsSendState != SMS_SEND_IDLE && millis() - smsSendStartTime > 30000)
     {
-        Serial.println("ERR: Fail CMGF=1");
-        notifyClients("sms_sent", R"({"status":"ERROR","message":"Fail mode"})");
-        return;
+        Serial.println("ERROR: Timed out while sending SMS.");
+        notifyClients("sms_sent", "{\"status\":\"ERROR\",\"message\":\"TIMEOUT\"}");
+        smsSendState = SMS_SEND_IDLE;
     }
-    delay(100);
-    Serial.print("DEBUG: Sending CMGS cmd: ");
-    Serial.println(number);
-    while (sim900.available())
-        sim900.read();
-    simResponseBuffer = "";
-    sim900.print("AT+CMGS=\"");
-    sim900.print(number);
-    sim900.println("\"");
-    Serial.println("DEBUG: Wait '>' (buffered)...");
-    String pBuf = "";
-    unsigned long startP = millis();
-    bool gotP = false;
-    bool gotE = false;
-    char rC;
-    while (millis() - startP < 6000)
+
+    // Now, process incoming data from the modem
+    while (sim900.available() > 0)
     {
-        while (sim900.available())
+        char c = sim900.read();
+
+        // Special case for SMS prompt - معالجة واحدة فقط للرمز '>'
+        if (c == '>' && smsSendState == SMS_SEND_WAITING_PROMPT)
         {
-            rC = sim900.read();
-            if (isPrintable(rC) || rC == '\r' || rC == '\n')
-                pBuf += rC;
-        }
-        if (pBuf.indexOf("> ") != -1)
-        {
-            Serial.println("\nDEBUG: Got '>'!(Buf)");
-            gotP = true;
-            break;
-        }
-        if (pBuf.indexOf("ERROR") != -1)
-        {
-            Serial.println("\nDEBUG: ERR wait prompt!(Buf)");
-            gotE = true;
-            break;
-        }
-        yield();
-        delay(20);
-    }
-    Serial.println("DEBUG: Prompt Buf:[" + pBuf + "]");
-    StaticJsonDocument<128> resDoc;
-    if (gotP)
-    {
-        delay(200);
-        Serial.print("DEBUG: Send body+CtrlZ...");
-        sim900.print(message.c_str());
-        delay(200);
-        sim900.write(26);
-        sim900.println();
-        Serial.println(" Sent.");
-        Serial.println("DEBUG: Wait final OK/ERR(basic)...");
-        String fLine = "";
-        startP = millis();
-        bool fin = false;
-        while (millis() - startP < 30000)
-        {
-            if (sim900.available())
+            Serial.println("SIM RX: > (Prompt)");
+            smsSendStartTime = millis();
+
+            if (smsIsUnicode)
             {
-                rC = sim900.read();
-                if (rC == '\n')
+                // إرسال PDU للنصوص العربية
+                String pdu = createPDU(smsNumberToSend, smsMessageToSend);
+                sim900.print(pdu);
+                Serial.println("INFO: إرسال PDU للنص العربي: " + pdu);
+            }
+            else
+            {
+                // إرسال النص العادي للإنجليزية
+                sim900.print(smsMessageToSend);
+                Serial.println("INFO: إرسال النص الإنجليزي: " + smsMessageToSend);
+            }
+
+            delay(100);
+            sim900.write(26); // Ctrl+Z
+            Serial.println("INFO: تم إرسال محتوى الرسالة. انتظار التأكيد النهائي.");
+            smsSendState = SMS_SEND_WAITING_FINAL_OK;
+            return; // الخروج فوراً لتجنب معالجة '>' كجزء من سطر
+        }
+
+        // Process full lines ending with newline
+        if (c == '\n')
+        {
+            simResponseBuffer.trim();
+            if (simResponseBuffer.length() > 0)
+            {
+                // --- INTELLIGENT DISPATCHER LOGIC ---
+                // First, check if the line is a URC (Unsolicited Result Code).
+                bool isUrc = simResponseBuffer.startsWith("+CMTI:") ||
+                             simResponseBuffer.startsWith("+CUSD:") ||
+                             simResponseBuffer.startsWith("RING") ||
+                             simResponseBuffer.startsWith("+CLIP:") ||
+                             simResponseBuffer.startsWith("NO CARRIER");
+
+                if (isUrc)
                 {
-                    fLine.trim();
-                    if (fLine.length() > 0)
+                    Serial.print("URC RX: ");
+                    Serial.println(simResponseBuffer);
+                    JsonDocument dataDoc;
+
+                    if (simResponseBuffer.startsWith("+CMTI:"))
                     {
-                        Serial.println("DBG Final RX:" + fLine);
-                        if (fLine.startsWith("OK") || fLine.indexOf("+CMGS:") != -1)
+                        int c1 = simResponseBuffer.indexOf(',');
+                        if (c1 != -1)
                         {
-                            Serial.println("SMS OK.");
-                            resDoc["status"] = "OK";
-                            resDoc["message"] = "SMS sent.";
-                            fin = true;
-                            break;
-                        }
-                        else if (fLine.startsWith("ERROR") || fLine.indexOf("+CMS") != -1 || fLine.indexOf("+CME") != -1)
-                        {
-                            Serial.println("SMS Fail(ERR)");
-                            resDoc["status"] = "ERROR";
-                            resDoc["message"] = fLine;
-                            fin = true;
-                            break;
+                            int i = simResponseBuffer.substring(c1 + 1).toInt();
+                            if (i > 0)
+                            {
+                                dataDoc.clear();
+                                dataDoc["index"] = i;
+                                String s;
+                                serializeJson(dataDoc, s);
+                                notifyClients("sms_received_indication", s);
+                            }
                         }
                     }
-                    fLine = "";
+                    else if (simResponseBuffer.startsWith("+CUSD:"))
+                    {
+                        String raw = simResponseBuffer;
+                        int colonPos = raw.indexOf(':');
+                        int firstComma = raw.indexOf(',', colonPos + 1);
+                        String ussdMsg = "";
+                        int responseType = -1;
+                        int dcs = -1;
+
+                        if (colonPos != -1)
+                        {
+                            String typeStr = (firstComma != -1) ? raw.substring(colonPos + 1, firstComma) : raw.substring(colonPos + 1);
+                            typeStr.trim();
+                            if (typeStr.length())
+                                responseType = typeStr.toInt();
+
+                            if (firstComma != -1)
+                            {
+                                int quoteStart = raw.indexOf('"', firstComma);
+                                int quoteEnd = (quoteStart != -1) ? raw.indexOf('"', quoteStart + 1) : -1;
+                                if (quoteStart != -1 && quoteEnd != -1)
+                                {
+                                    ussdMsg = raw.substring(quoteStart + 1, quoteEnd);
+                                }
+                                else
+                                {
+                                    int lastComma = raw.lastIndexOf(',');
+                                    ussdMsg = (lastComma > firstComma) ? raw.substring(firstComma + 1, lastComma) : raw.substring(firstComma + 1);
+                                }
+                                ussdMsg.trim();
+
+                                int lastComma = raw.lastIndexOf(',');
+                                if (lastComma > firstComma)
+                                {
+                                    String dcsStr = raw.substring(lastComma + 1);
+                                    dcsStr.trim();
+                                    if (dcsStr.length())
+                                        dcs = dcsStr.toInt();
+                                }
+                            }
+                        }
+
+                        String decoded = decodeUcs2(ussdMsg);
+                        if (decoded != ussdMsg)
+                        {
+                            ussdMsg = decoded;
+                        }
+
+                        dataDoc.clear();
+                        dataDoc["type"] = responseType;
+                        dataDoc["message"] = ussdMsg;
+                        if (dcs != -1)
+                            dataDoc["dcs"] = dcs;
+                        String out;
+                        serializeJson(dataDoc, out);
+                        notifyClients("ussd_response", out);
+                    }
+                    else if (simResponseBuffer.startsWith("RING"))
+                    {
+                        notifyClients("call_incoming", "RING");
+                    }
+                    else if (simResponseBuffer.startsWith("NO CARRIER"))
+                    {
+                        notifyClients("call_status", "NO CARRIER");
+                    }
+                    else if (simResponseBuffer.startsWith("+CLIP:"))
+                    {
+                        int q1 = simResponseBuffer.indexOf('"');
+                        int q2 = simResponseBuffer.indexOf('"', q1 + 1);
+                        if (q1 != -1 && q2 != -1)
+                        {
+                            String cid = simResponseBuffer.substring(q1 + 1, q2);
+                            dataDoc.clear();
+                            dataDoc["caller_id"] = cid;
+                            String s;
+                            serializeJson(dataDoc, s);
+                            notifyClients("caller_id", s);
+                        }
+                    }
                 }
-                else if (rC != '\r')
-                    fLine += rC;
+                // If it's NOT a URC, then it must be a response to a command
+                else if (smsListState == SMS_LIST_RUNNING)
+                {
+                    handleSmsListLine(simResponseBuffer);
+                }
+                else if (smsSendState != SMS_SEND_IDLE)
+                {
+                    handleSmsSendLine(simResponseBuffer);
+                }
+                else
+                {
+                    // It's a normal, non-URC response
+                    Serial.print("GENERIC RX: ");
+                    Serial.println(simResponseBuffer);
+                }
             }
-            yield();
+            simResponseBuffer = ""; // Reset buffer for the next line
         }
-        if (!fin)
+        else if (c != '\r')
         {
-            Serial.println("SMS Fail(Timeout)");
-            resDoc["status"] = "ERROR";
-            resDoc["message"] = "Timeout send";
+            simResponseBuffer += c;
         }
+    }
+}
+
+// --- SIM Actions ---
+
+void sendSMS(const String &number, const String &message)
+{
+    if (smsListState != SMS_LIST_IDLE || smsSendState != SMS_SEND_IDLE)
+    {
+        notifyClients("error", "النظام مشغول، يرجى المحاولة مرة أخرى.");
+        return;
+    }
+
+    if (message.length() == 0)
+    {
+        notifyClients("error", "رسالة فارغة");
+        return;
+    }
+
+    if (!simPinOk)
+    {
+        notifyClients("sms_sent", R"({"status":"ERROR","message":"SIM not ready","ar_message":"الشريحة غير جاهزة"})");
+        return;
+    }
+
+    smsNumberToSend = number;
+    smsMessageToSend = message;
+    smsIsUnicode = false;
+
+    // فحص وجود أحرف عربية
+    for (unsigned int i = 0; i < message.length(); i++)
+    {
+        unsigned char c = (unsigned char)message[i];
+        if (c > 127)
+        {
+            smsIsUnicode = true;
+            Serial.println("INFO: تم اكتشاف نص عربي - سيتم استخدام PDU mode");
+            break;
+        }
+    }
+
+    // مسح البيانات المعلقة
+    while (sim900.available() > 0)
+    {
+        sim900.read();
+        yield();
+    }
+
+    smsSendState = SMS_SEND_SETTING_CHARSET;
+    smsSendStartTime = millis();
+
+    if (smsIsUnicode)
+    {
+        Serial.println("INFO: إعداد PDU mode للنص العربي");
+        // إعداد PDU mode مع المعاملات الصحيحة
+        sim900.println("AT+CMGF=0"); // PDU mode
     }
     else
     {
-        Serial.println("DEBUG: No SMS prompt");
-        resDoc["status"] = "ERROR";
-        resDoc["message"] = gotE ? "ERR from modem" : "No SMS prompt";
+        Serial.println("INFO: إعداد Text mode للنص الإنجليزي");
+        sim900.println("AT+CMGF=1"); // Text mode
     }
-    String resS;
-    serializeJson(resDoc, resS);
-    notifyClients("sms_sent", resS);
-    Serial.println(">>> DEBUG: Exit sendSMS <<<");
 }
-
-// --- Status Update (Simplified) ---
-
-// --- SIM Actions (Reverting USSD to GSM mode) ---
 
 void sendUSSD(const String &code)
 {
-    Serial.println(">>> DEBUG: Entered sendUSSD function (GSM Mode) <<<");
-    if (!simPinOk)
-    {
-        Serial.println("USSD fail: SIM nrdy");
-        notifyClients("ussd_response", "{\"type\":-1,\"message\":\"SIM nrdy\"}");
-        return;
-    }
-
-    Serial.printf("Attempting to send USSD: %s\n", code.c_str());
     notifyClients("ussd_response", "{\"type\":-1,\"message\":\"Sending USSD...\"}");
-
-    // --- Step 1: Ensure Character Set is GSM ---
-    Serial.println("DEBUG: Setting CSCS=GSM...");
-    String cscsResponse = sendATCommand("AT+CSCS=\"GSM\"", 1500, "OK", false);
-    if (!cscsResponse.startsWith("OK"))
-    {
-        Serial.println("WARN: Failed to set CSCS=GSM, proceeding anyway...");
-    }
+    sendATCommand("AT+CSCS=\"GSM\"", 1500, "OK", false);
     delay(100);
-
-    // --- Step 2: Send USSD command with explicit DCS 15 ---
-    String cmd = "AT+CUSD=1,\"" + code + "\",15"; // Add DCS 15 back
-    while (sim900.available())
-        sim900.read();
-    simResponseBuffer = "";
-
-    Serial.print("DEBUG: Sending USSD command (GSM mode)...");
-    sim900.println(cmd); // Send the command
-    Serial.println(" Sent.");
-
-    delay(200);
-    Serial.println(">>> DEBUG: Exiting sendUSSD function (GSM Mode) <<<");
-    // Response (+CUSD:) handled by handleSimData()
+    sim900.println("AT+CUSD=1,\"" + code + "\",15");
 }
-
 void sendUSSDReply(const String &reply)
 {
-    Serial.println(">>> DEBUG: Entered sendUSSDReply function (GSM Mode) <<<");
-    if (!simPinOk)
-    {
-        Serial.println("USSD Reply fail: SIM nrdy");
-        notifyClients("ussd_response", "{\"type\":-1,\"message\":\"SIM !rdy reply\"}");
-        return;
-    }
-
-    Serial.printf("Attempting to send USSD Reply: %s\n", reply.c_str());
-
-    // --- Step 1: Ensure Character Set is GSM ---
-    Serial.println("DEBUG: Setting CSCS=GSM (for reply)...");
-    String cscsResponse = sendATCommand("AT+CSCS=\"GSM\"", 1500, "OK", false);
-    if (!cscsResponse.startsWith("OK"))
-    {
-        Serial.println("WARN: Failed to set CSCS=GSM for reply!");
-    }
+    sendATCommand("AT+CSCS=\"GSM\"", 1500, "OK", false);
     delay(100);
-
-    // --- Step 2: Send USSD reply command with explicit DCS 15 ---
-    String cmd = "AT+CUSD=1,\"" + reply + "\",15"; // Add DCS 15 back
+    sim900.println("AT+CUSD=1,\"" + reply + "\",15");
+}
+void readSMS(int index)
+{
+    if (index <= 0)
+        return;
+    String cmd = "AT+CMGR=" + String(index);
     while (sim900.available())
         sim900.read();
-    simResponseBuffer = "";
-
-    Serial.print("DEBUG: Sending USSD Reply (GSM mode)...");
     sim900.println(cmd);
-    Serial.println(" Sent.");
-
-    delay(200);
-    Serial.println(">>> DEBUG: Exiting sendUSSDReply function (GSM Mode) <<<");
-    // Response (+CUSD:) handled by handleSimData()
+    String header = "", body = "";
+    bool headerFound = false;
+    unsigned long startTime = millis();
+    while (millis() - startTime < 5000)
+    {
+        if (sim900.available())
+        {
+            String line = sim900.readStringUntil('\n');
+            line.trim();
+            if (line.length() == 0)
+                continue;
+            if (line.startsWith("+CMGR:"))
+            {
+                headerFound = true;
+                header = line;
+            }
+            else if (headerFound && !line.startsWith("OK"))
+            {
+                body += line;
+            }
+            else if (line.startsWith("OK"))
+                break;
+            else if (line.indexOf("ERROR") != -1)
+            {
+                headerFound = false;
+                break;
+            }
+        }
+        yield();
+    }
+    if (!headerFound)
+    {
+        notifyClients("sms_content", "{\"error\":\"Failed to read SMS\"}");
+        return;
+    }
+    JsonDocument doc;
+    doc["index"] = index;
+    body.trim();                           // CORRECTED: Trim the string first.
+    String decodedBody = decodeUcs2(body); // Then pass the trimmed string.
+    doc["body"] = decodedBody;
+    if (decodedBody != body)
+        doc["body_hex"] = body;
+    String jsonOutput;
+    serializeJson(doc, jsonOutput);
+    notifyClients("sms_content", jsonOutput);
+}
+void deleteSMS(int index)
+{
+    if (index <= 0)
+        return;
+    String response = sendATCommand("AT+CMGD=" + String(index), 5000, "OK", false);
+    JsonDocument doc;
+    doc["index"] = index;
+    doc["success"] = response.startsWith("OK");
+    if (!doc["success"])
+        doc["message"] = response;
+    String jsonOutput;
+    serializeJson(doc, jsonOutput);
+    notifyClients("sms_deleted", jsonOutput);
 }
 
+// --- Status Update ---
 void updateStatus()
 {
     if (!checkSimPin())
@@ -1146,101 +1007,335 @@ void updateStatus()
         simPhoneNumber = "N/A";
         return;
     }
-    bool changed = false;
-    bool copsOk = false;
     String copsLine = sendATCommand("AT+COPS?", 8000, "+COPS:", true);
-    String newOp = "N/A";
     if (copsLine.startsWith("+COPS:"))
     {
-        copsOk = true;
         int q1 = copsLine.indexOf('"');
         int q2 = copsLine.indexOf('"', q1 + 1);
         if (q1 != -1 && q2 != -1)
-            newOp = copsLine.substring(q1 + 1, q2);
-        else
-        {
-            int c1 = copsLine.indexOf(',');
-            int c2 = copsLine.indexOf(',', c1 + 1);
-            if (c1 != -1 && c2 != -1 && copsLine.substring(c1 + 1, c2).toInt() == 2)
-            {
-                int iq1 = copsLine.indexOf('"', c2);
-                int iq2 = copsLine.indexOf('"', iq1 + 1);
-                if (iq1 != -1 && iq2 != -1)
-                    newOp = "ID:" + copsLine.substring(iq1 + 1, iq2);
-                else
-                    newOp = "Unk Fmt(Num)";
-            }
-            else
-                newOp = "Unk Fmt(Op)";
-        }
+            networkOperator = copsLine.substring(q1 + 1, q2);
     }
-    else
-    {
-        copsOk = false;
-        if (copsLine != "TIMEOUT")
-            Serial.println("COPS Err:" + copsLine);
-        else
-            Serial.println("COPS Timeout");
-        newOp = "N/A(COPS Err)";
-    }
-    if (networkOperator != newOp)
-    {
-        networkOperator = newOp;
-        changed = true;
-    }
-    delay(200);
     String csqLine = sendATCommand("AT+CSQ", 3000, "+CSQ:", true);
-    String newSig = "N/A";
-    bool csqOk = false;
     if (csqLine.startsWith("+CSQ:"))
     {
-        csqOk = true;
         int cPos = csqLine.indexOf(',');
         if (cPos != -1)
         {
             int rssi = csqLine.substring(csqLine.indexOf(':') + 2, cPos).toInt();
             if (rssi >= 0 && rssi <= 31)
-                newSig = String(-113 + (2 * rssi)) + " dBm";
-            else if (rssi == 99)
-                newSig = "Not detect";
+                signalQuality = String(-113 + (2 * rssi)) + " dBm";
             else
-                newSig = "Inv code(" + String(rssi) + ")";
+                signalQuality = "N/A";
+        }
+    }
+    simStatus = (copsLine.startsWith("+COPS:")) ? "Registered" : "Not Registered";
+}
+
+// --- Helper: Decode UCS-2 Hex to UTF-8 ---
+String decodeUcs2(const String &hexStr)
+{
+    String out = "";
+    if (hexStr.length() == 0 || hexStr.length() % 4 != 0)
+        return hexStr;
+    for (unsigned int i = 0; i < hexStr.length(); i += 4)
+    {
+        for (int j = 0; j < 4; ++j)
+        {
+            if (!isxdigit(hexStr.charAt(i + j)))
+                return hexStr;
+        }
+        uint16_t code = (uint16_t)strtol(hexStr.substring(i, i + 4).c_str(), NULL, 16);
+        if (code < 0x80)
+        {
+            out += char(code);
+        }
+        else if (code < 0x800)
+        {
+            out += char(0xC0 | (code >> 6));
+            out += char(0x80 | (code & 0x3F));
         }
         else
-            newSig = "Parse Err(CSQ)";
+        {
+            out += char(0xE0 | (code >> 12));
+            out += char(0x80 | ((code >> 6) & 0x3F));
+            out += char(0x80 | (code & 0x3F));
+        }
     }
-    else
+    return out;
+}
+// --- Helper: UTF-8 to UCS-2 Hex Encoder ---
+
+String encodeUcs2(const String &utf8Str)
+{
+    String hexStr = "";
+    unsigned int strLength = utf8Str.length();
+
+    for (unsigned int i = 0; i < strLength; i++)
     {
-        if (csqLine != "TIMEOUT")
-            Serial.println("CSQ Err:" + csqLine);
+        uint16_t ucs2Char;
+        unsigned char c = (unsigned char)utf8Str[i];
+
+        if (c < 0x80)
+        {
+            ucs2Char = c;
+        }
+        else if ((c & 0xE0) == 0xC0)
+        {
+            if (i + 1 < strLength)
+            {
+                unsigned char c2 = (unsigned char)utf8Str[++i];
+                ucs2Char = ((c & 0x1F) << 6) | (c2 & 0x3F);
+            }
+            else
+            {
+                ucs2Char = 0x003F;
+            }
+        }
+        else if ((c & 0xF0) == 0xE0)
+        {
+            if (i + 2 < strLength)
+            {
+                unsigned char c2 = (unsigned char)utf8Str[++i];
+                unsigned char c3 = (unsigned char)utf8Str[++i];
+                ucs2Char = ((c & 0x0F) << 12) | ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+            }
+            else
+            {
+                ucs2Char = 0x003F;
+            }
+        }
         else
-            Serial.println("CSQ Timeout");
-        newSig = "N/A(CSQ Err)";
+        {
+            ucs2Char = 0x003F;
+        }
+
+        char hex[5];
+        sprintf(hex, "%04X", ucs2Char);
+        hexStr += hex;
     }
-    if (signalQuality != newSig)
+
+    Serial.println("DEBUG: UTF-8 '" + utf8Str + "' -> UCS2 '" + hexStr + "'");
+    return hexStr;
+}
+// =========================================================================
+// SMS List State Machine Implementation
+// =========================================================================
+// --- SMS List State Machine Logic ---
+void startGetSmsList()
+{
+    if (smsListState != SMS_LIST_IDLE)
     {
-        signalQuality = newSig;
-        changed = true;
+        Serial.println("WARN: getSMSList already running.");
+        return;
     }
-    String newSt = "Unknown";
-    if (copsOk)
-        newSt = "Registered";
-    else
-        newSt = "Not Reg/Search...";
-    if (simStatus != newSt)
+    Serial.println("INFO: Starting non-blocking SMS list retrieval.");
+    while (sim900.available())
+        sim900.read();
+
+    smsListState = SMS_LIST_RUNNING;
+    smsListStartTime = millis(); // Start the timeout timer
+    smsWaitingForContent = false;
+
+    notifyClients("sms_list_started", "{}");
+    sim900.println("AT+CMGL=\"ALL\"");
+    Serial.println("SIM TX: AT+CMGL=\"ALL\"");
+}
+
+void handleSmsListLine(const String &line)
+{
+    smsListStartTime = millis(); // Reset timeout timer on each relevant line received
+
+    if (line.startsWith("+CMGL:"))
     {
-        simStatus = newSt;
-        changed = true;
+        currentSmsJson.clear();
+        int indexStart = line.indexOf(':') + 1;
+        int indexEnd = line.indexOf(',', indexStart);
+        currentSmsJson["index"] = line.substring(indexStart, indexEnd).toInt();
+        int statusStart = line.indexOf('"', indexEnd) + 1;
+        int statusEnd = line.indexOf('"', statusStart);
+        currentSmsJson["status"] = line.substring(statusStart, statusEnd);
+        int senderStart = line.indexOf('"', statusEnd + 1) + 1;
+        int senderEnd = line.indexOf('"', senderStart);
+        currentSmsJson["sender"] = line.substring(senderStart, senderEnd);
+        int tsStart = line.indexOf('"', senderEnd + 1);
+        tsStart = line.indexOf('"', tsStart + 1) + 1;
+        int tsEnd = line.indexOf('"', tsStart);
+        if (tsStart > 0 && tsEnd > -1)
+        {
+            currentSmsJson["timestamp"] = line.substring(tsStart, tsEnd);
+        }
+        else
+        {
+            currentSmsJson["timestamp"] = "";
+        }
+        smsWaitingForContent = true;
     }
-    bool overallRdy = (simPinOk && copsOk);
-    if (simPinOk != overallRdy)
+    else if (smsWaitingForContent)
     {
-        Serial.printf("SIM readiness -> %s\n", overallRdy ? "YES" : "NO");
-        simPinOk = overallRdy;
-        changed = true;
-    } /* CNUM commented out */
-    if (changed)
-    {
-        Serial.printf("Status Update: SIM Ready=%s|St=%s|Sig=%s|Op=%s\n", simPinOk ? "Y" : "N", simStatus.c_str(), signalQuality.c_str(), networkOperator.c_str());
+        String body = line;
+        String decodedBody = decodeUcs2(body);
+        currentSmsJson["body"] = decodedBody;
+        if (decodedBody != body)
+        {
+            currentSmsJson["body_hex"] = body;
+        }
+        String jsonOutput;
+        serializeJson(currentSmsJson, jsonOutput);
+        notifyClients("sms_item", jsonOutput);
+        smsWaitingForContent = false;
     }
+    else if (line.startsWith("OK"))
+    {
+        Serial.println("INFO: SMS list retrieval finished successfully.");
+        notifyClients("sms_list_finished", "{\"status\":\"complete\"}");
+        smsListState = SMS_LIST_IDLE; // Reset the state machine
+    }
+    else if (line.indexOf("ERROR") != -1)
+    {
+        Serial.println("ERROR: Failed to retrieve SMS list.");
+        notifyClients("sms_list_finished", "{\"status\":\"error\"}");
+        smsListState = SMS_LIST_IDLE; // Reset the state machine
+    }
+}
+
+
+void handleSmsSendLine(const String &line)
+{
+    Serial.print("SMS Send RX: ");
+    Serial.println(line);
+    smsSendStartTime = millis();
+
+    switch (smsSendState)
+    {
+    case SMS_SEND_IDLE:
+        Serial.println("WARNING: Received response while SMS send state is IDLE");
+        break;
+
+    case SMS_SEND_SETTING_CHARSET:
+        if (line.startsWith("OK"))
+        {
+            smsSendState = SMS_SEND_WAITING_PROMPT;
+            smsSendStartTime = millis();
+
+            if (smsIsUnicode)
+            {
+                // للنصوص العربية: إرسال PDU
+                String pdu = createPDU(smsNumberToSend, smsMessageToSend);
+                
+                // الحل الصحيح: حساب طول PDU بدون SMSC (أول بايتين)
+                int pduLengthWithoutSMSC = (pdu.length() - 2) / 2; // طرح "00" الأولى وقسمة على 2
+
+                sim900.print("AT+CMGS=");
+                sim900.println(pduLengthWithoutSMSC);
+                Serial.println("SIM TX: AT+CMGS=" + String(pduLengthWithoutSMSC));
+                Serial.println("INFO: انتظار رمز PDU للنص العربي - PDU Length: " + String(pduLengthWithoutSMSC));
+            }
+            else
+            {
+                // للنصوص الإنجليزية: إرسال عادي
+                sim900.print("AT+CMGS=\"");
+                sim900.print(smsNumberToSend);
+                sim900.println("\"");
+                Serial.println("SIM TX: AT+CMGS=\"" + smsNumberToSend + "\"");
+                Serial.println("INFO: انتظار رمز الرسالة الإنجليزية '>'");
+            }
+        }
+        else if (line.indexOf("ERROR") != -1)
+        {
+            Serial.println("ERROR: فشل في إعداد وضع الإرسال");
+            notifyClients("sms_sent", R"({"status":"ERROR","message":"Failed to set SMS mode","ar_message":"فشل في إعداد وضع الإرسال"})");
+            smsSendState = SMS_SEND_IDLE;
+        }
+        break;
+
+    case SMS_SEND_WAITING_PROMPT:
+        if (line.indexOf("ERROR") != -1)
+        {
+            if (smsIsUnicode)
+            {
+                Serial.println("ERROR: فشل في بدء إرسال الرسالة العربية - خطأ في طول PDU أو الرقم");
+                notifyClients("sms_sent", R"({"status":"ERROR","message":"Arabic PDU length error or invalid number","ar_message":"خطأ في طول PDU العربي أو رقم غير صالح"})");
+            }
+            else
+            {
+                Serial.println("ERROR: فشل في بدء إرسال الرسالة الإنجليزية");
+                notifyClients("sms_sent", R"({"status":"ERROR","message":"Failed to send English SMS","ar_message":"فشل في إرسال الرسالة الإنجليزية"})");
+            }
+            smsSendState = SMS_SEND_IDLE;
+        }
+        break;
+
+    case SMS_SEND_WAITING_FINAL_OK:
+        if (line.startsWith("+CMGS:"))
+        {
+            return;
+        }
+        else if (line.startsWith("OK"))
+        {
+            if (smsIsUnicode)
+            {
+                Serial.println("INFO: تم إرسال الرسالة العربية بنجاح!");
+                notifyClients("sms_sent", R"({"status":"OK","message":"Arabic SMS sent successfully","ar_message":"تم إرسال الرسالة العربية بنجاح"})");
+            }
+            else
+            {
+                Serial.println("INFO: تم إرسال الرسالة الإنجليزية بنجاح!");
+                notifyClients("sms_sent", R"({"status":"OK","message":"English SMS sent successfully","ar_message":"تم إرسال الرسالة الإنجليزية بنجاح"})");
+            }
+            smsSendState = SMS_SEND_IDLE;
+        }
+        else if (line.indexOf("ERROR") != -1)
+        {
+            if (smsIsUnicode)
+            {
+                Serial.println("ERROR: فشل في إرسال الرسالة العربية - خطأ في الشبكة أو PDU");
+                notifyClients("sms_sent", R"({"status":"ERROR","message":"Arabic SMS network error or PDU format error","ar_message":"خطأ في الشبكة أو تنسيق PDU العربي"})");
+            }
+            else
+            {
+                Serial.println("ERROR: فشل في إرسال الرسالة الإنجليزية");
+                notifyClients("sms_sent", R"({"status":"ERROR","message":"English SMS failed","ar_message":"فشل في إرسال الرسالة الإنجليزية"})");
+            }
+            smsSendState = SMS_SEND_IDLE;
+        }
+        break;
+    }
+}
+//  createPDU
+String createPDU(const String &number, const String &message)
+{
+    String pdu = "00";          // 1- SMSC length = 0 (use default SMSC)
+    pdu += "11";                // 2- TP-Mti=01 (SUBMIT) + VPF=10 (Relative)
+    pdu += "00";                // 3- TP-MR (Message Reference = 0)
+
+    // 4-A LEN (in digits)
+    String msisdn = number.startsWith("+") ? number.substring(1) : number;
+    char lenHex[3];
+    snprintf(lenHex, sizeof(lenHex), "%02X", (uint8_t)msisdn.length());
+    pdu += lenHex;
+
+    // 4-B TON/NPI
+    pdu += (number.startsWith("+") ? "91" : "81");
+
+    // 4-C digits BCD swap
+    size_t n = msisdn.length();
+    for (size_t i = 0; i < n; i += 2)
+        pdu += (i + 1 < n)
+                 ? String() + msisdn.charAt(i + 1) + msisdn.charAt(i)
+                 : String("F") + msisdn.charAt(i);
+
+    pdu += "00";                // TP-PID
+    pdu += "08";                // TP-DCS → UCS2
+    pdu += "AA";                // VP - ~24 hours
+
+    // User-Data (UCS2)
+    String ud = encodeUcs2(message);
+    uint8_t udBytes = ud.length() / 2;
+
+    char udl[3];
+    snprintf(udl, sizeof(udl), "%02X", udBytes);
+    pdu += udl;
+    pdu += ud;
+
+    return pdu;
 }
