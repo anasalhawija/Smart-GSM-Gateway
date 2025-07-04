@@ -445,10 +445,7 @@ void sendUSSD(const String &code)
     // IMPORTANT: never use delay() inside callbacks (e.g., HTTP/WS handlers) on ESPAsyncWebServer,
     // it can lead to watchdog resets and Exception(9) crashes. The call above already waits
     // synchronously for the modem response, so an extra delay isn’t necessary.
-    if (currentSimCharset != "GSM") {
-        sendATCommand("AT+CSCS=\"GSM\"", 1500, "OK", false);
-        currentSimCharset = "GSM"; 
-    }
+    delay(100);
     sim900.println("AT+CUSD=1,\"" + code + "\",15");
 }
 
@@ -460,6 +457,7 @@ void sendUSSDReply(const String &reply)
 {
     // Same rationale as sendUSSD(): avoid delay() inside potential web-server callbacks.
     sendATCommand("AT+CSCS=\"GSM\"", 1500, "OK", false);
+    delay(100);
     sim900.println("AT+CUSD=1,\"" + reply + "\",15");
 }
 
