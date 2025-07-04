@@ -1,4 +1,20 @@
 /**
+ * @file    wifi_manager.cpp
+ * @author  Eng: Anas Alhawija
+ * @brief   Implementation of WiFi management logic.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description Implements the logic for connecting to a WiFi network, starting a
+ *              failsafe Access Point, handling network reconnections, and managing
+ *              the device's dual-mode network operation.
+ */
+
+
+/**
  * @file wifi_manager.cpp
  * @brief Implementation of WiFi, AP, and network management functions.
  */

@@ -1,4 +1,20 @@
 /**
+ * @file    sim_handler.cpp
+ * @author  Eng: Anas Alhawija
+ * @brief   Implementation of the SIM900 module driver.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description Contains the core logic for communicating with the SIM900 module. It handles
+ *              sending AT commands, parsing responses, managing state machines for SMS/USSD,
+ *              and decoding special formats like PDU and UCS-2.
+ */
+
+
+/**
  * @file sim_handler.cpp
  * @brief Implementation for all SIM900 module interactions.
  * @details This file contains all functions for initialization, sending commands,

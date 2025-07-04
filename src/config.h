@@ -1,4 +1,23 @@
 /**
+ * @file    config.h
+ * @author  Eng: Anas Alhawija
+ * @brief   Central configuration, global variables, and type definitions.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description This header file centralizes all user-configurable settings, pin definitions,
+ *              global variable declarations (extern), and necessary library includes, providing
+ *              a single point of control for the project's parameters.
+ */
+
+
+
+
+
+/**
  * @file config.h
  * @brief Configuration settings, global variables, and type definitions for the GSM Gateway.
  */

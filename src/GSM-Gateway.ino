@@ -1,4 +1,21 @@
 /**
+ * @file    GSM-Gateway.ino
+ * @author  Eng: Anas Alhawija
+ * @brief   Main entry point for the Smart GSM Gateway project.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description This file contains the primary setup() and loop() functions. It initializes
+ *              all modules (FileSystem, SIM, WiFi, WebServer) and orchestrates the main
+ *              program flow, acting as the core of the application.
+ */
+
+
+
+/**
  * @file GSM-Gateway.ino
  * @brief Main file for the ESP8266 GSM Gateway project.
  * @details This file contains the primary setup and loop functions. It initializes all modules

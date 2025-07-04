@@ -1,4 +1,20 @@
 /**
+ * @file    web_server.cpp
+ * @author  Eng: Anas Alhawija
+ * @brief   Implementation of the web and WebSocket server.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description Implements all web-facing logic. This includes serving the frontend files
+ *              (HTML, CSS, JS), handling API requests, and managing the WebSocket
+ *              connection for bidirectional, real-time updates with clients.
+ */
+
+
+/**
  * @file web_server.cpp
  * @brief Implementation of the web server (HTTP and WebSockets).
  */

@@ -1,4 +1,21 @@
 /**
+ * @file    file_system.cpp
+ * @author  Eng: Anas Alhawija
+ * @brief   Implementation of filesystem and configuration management.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description Implements the logic for mounting the LittleFS filesystem, formatting it
+ *              if necessary, and handling the serialization/deserialization of the
+ *              configuration to and from a JSON file.
+ */
+
+ 
+
+/**
  * @file file_system.cpp
  * @brief Implementation of filesystem operations.
  */

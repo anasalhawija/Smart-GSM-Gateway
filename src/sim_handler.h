@@ -1,4 +1,20 @@
 /**
+ * @file    sim_handler.h
+ * @author  Eng: Anas Alhawija
+ * @brief   Function prototypes for all SIM900 module interactions.
+ * @version 2.1
+ * @date    2025-07-04
+ * 
+ * @project Smart GSM Gateway
+ * @license MIT License
+ * 
+ * @description Declares the public interface for the SIM handler module, including functions
+ *              for initialization, status checking, sending AT commands, and performing
+ *              actions like sending SMS and USSD codes.
+ */
+
+
+/**
  * @file sim_handler.h
  * @brief Function prototypes for all SIM900 module interactions.
  */

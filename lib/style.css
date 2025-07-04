@@ -1,3 +1,17 @@
+/*
+=================================================================================
+  Project:  Smart GSM Gateway - Frontend UI
+  File:     style.css
+  Author:   Eng: Anas Alhawija
+  Version:  2.1
+  Date:     2025-07-04
+  License:  MIT License
+
+  About:    This file contains all the CSS styles for the gateway's web interface,
+            ensuring a clean, responsive, and user-friendly experience.
+=================================================================================
+*/
+
 /* Basic Pico.css-like styling - Or include Pico CSS framework */
 :root {
   --pico-font-size: 100%;
